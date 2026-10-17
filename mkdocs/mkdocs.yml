@@ -2,9 +2,9 @@
 # then: mkdocs serve -f mkdocs/mkdocs.yml
 site_name: Windows ISO Updater
 site_description: Download, service and rebuild an up-to-date Windows ISO with DISM and oscdimg.
-site_url: https://brycefors.github.io/Windows-ISO-Updater/
-repo_url: https://github.com/brycefors/Windows-ISO-Updater
-repo_name: brycefors/Windows-ISO-Updater
+site_url: https://bryceforsm.github.io/Windows-ISO-Updater/
+repo_url: https://github.com/bryceforsm/Windows-ISO-Updater
+repo_name: bryceforsm/Windows-ISO-Updater
 
 # Rooted at the repo so README.md is the home page and its docs/ links resolve unchanged.
 docs_dir: ..
@@ -30,7 +30,7 @@ nav:
   - Unattended Installs: docs/unattended-installs.md
   - Technical Reference: docs/reference.md
   - Design Notes: docs/design-notes.md
-  - Releases: https://github.com/brycefors/Windows-ISO-Updater/releases
+  - Releases: https://github.com/bryceforsm/Windows-ISO-Updater/releases
 
 theme:
   name: material

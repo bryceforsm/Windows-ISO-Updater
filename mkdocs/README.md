@@ -1,6 +1,6 @@
 # Documentation site
 
-The [documentation site](https://brycefors.github.io/Windows-ISO-Updater/) is built from the repo's own
+The [documentation site](https://bryceforsm.github.io/Windows-ISO-Updater/) is built from the repo's own
 markdown with [MkDocs](https://www.mkdocs.org/) and the
 [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/) theme, then published to GitHub
 Pages. Nothing in this folder is published itself, apart from `assets/`.
