@@ -1,5 +1,5 @@
 # Windows ISO Updater
-# Version: 2026.10.13.3   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
+# Version: 2026.10.31.1   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
 #
 #region Script overview
 # This script builds a fully up-to-date ("slipstreamed") Windows 11, Windows 10 or Windows Server
@@ -121,7 +121,7 @@ param(
     [Parameter(HelpMessage = 'Deprecated and ignored. Recovery image servicing is on by default now, so use -SkipWinRE to turn it off. Accepted so existing scheduled tasks and wrapper scripts that still pass it keep running')]
     [switch]$ServiceWinRE,
 
-    [Parameter(HelpMessage = 'Skip the cumulative update in hotpatch non-baseline months (February, March, May, June, August, September, November, December). Use only for Windows 11 Enterprise 25H2 media enrolled in Intune or Azure Arc hotpatch. In baseline months (January, April, July, October) the cumulative update is integrated normally.')]
+    [Parameter(HelpMessage = 'Integrate the newest cumulative update from a hotpatch baseline month (January, April, July or October) rather than the newest overall, so in any other month the image is built to the most recent baseline. Use only for Windows 11 Enterprise 25H2 media enrolled in Intune or Azure Arc hotpatch.')]
     [switch]$BaselineOnly,
 
     [Parameter(HelpMessage = 'Allow the optional preview updates Microsoft publishes late in the month (titled "... Preview of Monthly Quality Rollup" or "Cumulative Update Preview") to be selected. They are excluded by default because they are next month''s fixes released early for testing, so they carry a higher build than anything Windows Update will offer the finished media. Useful for validating a coming update, not for production media')]
@@ -292,6 +292,9 @@ param(
     [Parameter(HelpMessage = 'Password for the TaskUsername account. Never stored in the task action arguments or written to logs.')]
     [string]$TaskPassword,
 
+    [Parameter(HelpMessage = 'Ask for the -TaskUsername password at startup without echoing it. Added automatically when the script relaunches itself elevated, so the password never appears on a command line')]
+    [switch]$PromptTaskPassword,
+
     [switch]$SkipInteractive # Skips the interactive confirmation prompt
 )
 #endregion
@@ -304,7 +307,7 @@ $script:ScriptPath = $PSCommandPath
 
 # Kept in step with the header comment by tools\Update-Version.ps1, and shown in the log and recorded in
 # the build stamp so a finished ISO can be traced back to the exact script that built it.
-$ScriptVersion = '2026.10.13.3'
+$ScriptVersion = '2026.10.31.1'
 
 # A scheduled run has nobody to answer a prompt.
 if ($Scheduled) {
@@ -343,7 +346,9 @@ if ([int]($OsInfo).BuildNumber -lt 10240) {
 # Self-elevate the script if required
 if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] 'Administrator')) {
     if ([int](Get-CimInstance -Class Win32_OperatingSystem | Select-Object -ExpandProperty BuildNumber) -ge 6000) {
-        $ArgumentList = @("-File", "`"$($MyInvocation.MyCommand.Path)`"")
+        $ArgumentList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$($MyInvocation.MyCommand.Path)`"")
+        # An elevated process starts in System32, so a relative path would point at the wrong place.
+        $PathParameters = @('IsoPath', 'UpdatePath', 'UnattendPath', 'DriverPath', 'ExtraFilesPath', 'DownloadPath', 'WorkPath', 'OutputIsoPath', 'RecoveryIsoPath', 'OscdimgPath', 'LogPath', 'StampPath')
         # Re-add any passed parameters
         foreach ($Parameter in $PSBoundParameters.Keys) {
             if ($Parameter -eq 'TaskPassword') { continue }
@@ -352,20 +357,39 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
                 if ($Value.IsPresent) { $ArgumentList += "-$Parameter" }
             }
             else {
+                if ($Value -and $PathParameters -contains $Parameter) {
+                    $Value = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Value)
+                }
+                # -File cannot carry an array, and -KeepEditions splits a comma-separated string itself.
+                # Backslashes before a quote are doubled so a path such as "D:\ISOs\" keeps its closing quote.
+                $Text = (@($Value) -join ',') -replace '(\\*)"', '$1$1\"' -replace '(\\+)$', '$1$1'
                 $ArgumentList += "-$Parameter"
-                $ArgumentList += "`"$Value`""
+                $ArgumentList += "`"$Text`""
             }
         }
 
-        # Prompt for the password here rather than passing it on the command line
-        if ($PSBoundParameters.ContainsKey('TaskUsername') -and -not $Unattended -and -not $SkipInteractive) {
-            $ArgumentList += '-TaskPassword'
-            $ArgumentList += "`"$(Read-Host 'TaskPassword (for the elevated session)')`""
+        # The elevated process asks for the password itself, so it never sits on a command line.
+        if ($PSBoundParameters.ContainsKey('TaskUsername') -and -not $Unattended -and -not $SkipInteractive -and -not $PromptTaskPassword) {
+            $ArgumentList += '-PromptTaskPassword'
         }
 
-        Start-Process -FilePath PowerShell.exe -Verb Runas -ArgumentList $ArgumentList
-        exit
+        # Waiting hands the exit code back to the caller, which is how -CheckOnly reports its 0 or 10.
+        try {
+            $Elevated = Start-Process -FilePath PowerShell.exe -Verb Runas -ArgumentList $ArgumentList -Wait -PassThru -ErrorAction Stop
+            exit $Elevated.ExitCode
+        }
+        catch {
+            Write-Host "Could not start the elevated session: $($_.Exception.Message)" -ForegroundColor Red
+            exit 1
+        }
     }
+}
+
+if ($PromptTaskPassword -and -not $TaskPassword) {
+    $SecurePassword = Read-Host "Password for $TaskUsername" -AsSecureString
+    $PasswordPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecurePassword)
+    try { $TaskPassword = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($PasswordPointer) }
+    finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($PasswordPointer) }
 }
 
 # Add a Window Title
@@ -849,17 +873,22 @@ function Get-FileDownload {
         [Parameter(Mandatory)][string]$Destination
     )
 
+    # The final name only appears once the file is complete, because later runs reuse whatever exists under it.
+    $Partial = "$Destination.partial"
+    Remove-Item -LiteralPath $Partial -Force -ErrorAction SilentlyContinue
+
     # Prefer BITS: it is resumable and far more reliable for multi-GB downloads.
     # Under a scheduled task running as another user, BITS jobs fail to enqueue and this falls through to Invoke-WebRequest below.
     if (Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue) {
         try {
             Write-HostTimestamp '  Downloading with BITS...'
-            Start-BitsTransfer -Source $Url -Destination $Destination -Description 'Windows download' -ErrorAction Stop
-            if (Test-Path -LiteralPath $Destination) { return $true }
+            Start-BitsTransfer -Source $Url -Destination $Partial -Description 'Windows download' -ErrorAction Stop
+            Move-Item -LiteralPath $Partial -Destination $Destination -Force -ErrorAction Stop
+            return $true
         }
         catch {
             Write-HostTimestamp "  BITS transfer failed ($($_.Exception.Message)). Falling back to a direct download..." -ForegroundColor Yellow
-            Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $Partial -Force -ErrorAction SilentlyContinue
         }
     }
 
@@ -867,13 +896,30 @@ function Get-FileDownload {
     try {
         Write-HostTimestamp '  Downloading with Invoke-WebRequest...'
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing -ErrorAction Stop
-        if (Test-Path -LiteralPath $Destination) { return $true }
+        Invoke-WebRequest -Uri $Url -OutFile $Partial -UseBasicParsing -ErrorAction Stop
+        Move-Item -LiteralPath $Partial -Destination $Destination -Force -ErrorAction Stop
+        return $true
     }
     catch {
         Write-HostTimestamp "  Download failed: $($_.Exception.Message)" -ForegroundColor Red
+        Remove-Item -LiteralPath $Partial -Force -ErrorAction SilentlyContinue
     }
     return $false
+}
+
+# Catalog packages carry their own SHA-1 in the file name (name_<40 hex>.msu), which proves the file is whole.
+# A name without one falls back to the signature. An unsigned result passes there, since not every older
+# package is embedded-signed and DISM still checks the package when it is added.
+function Test-UpdatePackageFile {
+    param([Parameter(Mandatory)][string]$Path)
+
+    if ((Split-Path -Leaf $Path) -match '_([0-9a-fA-F]{40})\.(msu|cab)$') {
+        $Expected = $Matches[1]
+        return ((Get-FileHash -LiteralPath $Path -Algorithm SHA1).Hash -eq $Expected)
+    }
+    $Signature = Get-AuthenticodeSignature -LiteralPath $Path
+    if ($Signature.Status -eq 'Valid') { return ($Signature.SignerCertificate.Subject -match 'O=Microsoft Corporation') }
+    return ($Signature.Status -ne 'HashMismatch')
 }
 
 # Verifies a download URL points at an official Microsoft-owned host over HTTPS, so the script never
@@ -1502,17 +1548,14 @@ function Get-KbTargetBuilds {
     return $Builds
 }
 
-function Test-IsHotpatchMonth {
-    param(
-        [Parameter(Mandatory)][object[]]$AllResults,
-        [Parameter(Mandatory)][datetime]$ReferenceDate
-    )
-    $Ym = $ReferenceDate.ToString('yyyy-MM')
-    return [bool]($AllResults | Where-Object {
-        $_.Title -match '(?i)hotpatch' -and
-        $_.LastUpdated -and
-        ([datetime]$_.LastUpdated).ToString('yyyy-MM') -eq $Ym
-    })
+function Test-IsHotpatchBaseline {
+    param([Parameter(Mandatory)][object]$Entry)
+    # The month in the title wins, because a re-released package gets a newer LastUpdated. The cumulative
+    # update query never returns hotpatch titles, so the calendar is the only usable signal.
+    if ("$($Entry.Title)" -match '^\d{4}-(\d{2})\b') { $Month = [int]$Matches[1] }
+    elseif ($Entry.LastUpdated) { $Month = ([datetime]$Entry.LastUpdated).Month }
+    else { return $false }
+    return (@(1, 4, 7, 10) -contains $Month)
 }
 
 # Finds the newest cumulative update in the catalog for a given search query, downloads it to the download
@@ -1557,6 +1600,14 @@ function Get-LatestCatalogPackage {
         Write-HostTimestamp '  No catalog results matched the expected update type after filtering.' -ForegroundColor Yellow
         return $null
     }
+    if ($BaselineOnly) {
+        $Filtered = $Filtered | Where-Object { Test-IsHotpatchBaseline -Entry $_ }
+        if (-not $Filtered) {
+            Write-HostTimestamp '  -BaselineOnly: the catalog results hold no January, April, July or October cumulative update.' -ForegroundColor Yellow
+            $script:LcuSkippedBaselineOnly = $true
+            return $null
+        }
+    }
 
     $Selected = $Filtered |
         Sort-Object -Property @{ Expression = { $_.LastUpdated }; Descending = $true }, @{ Expression = { $_.SizeMB }; Descending = $true } |
@@ -1568,12 +1619,6 @@ function Get-LatestCatalogPackage {
 
     Write-HostTimestamp "  Selected: $($Selected.Title)$(if ($Selected.LastUpdated) { " (released $(Get-FriendlyDate -Date $Selected.LastUpdated))" })" -ForegroundColor Green
     if ($SelectedDate) { $SelectedDate.Value = $Selected.LastUpdated }
-
-    if ($BaselineOnly -and $Selected.LastUpdated -and (Test-IsHotpatchMonth -AllResults $Results -ReferenceDate ([datetime]$Selected.LastUpdated))) {
-        Write-HostTimestamp "  -BaselineOnly: $($Selected.LastUpdated.ToString('yyyy-MM')) is a hotpatch non-baseline month - skipping this cumulative update." -ForegroundColor Yellow
-        $script:LcuSkippedBaselineOnly = $true
-        return $null
-    }
 
     $PrimaryKb = if ($Selected.Title -match '(?i)KB(\d{6,})') { $Matches[1] } else { $null }
 
@@ -1651,6 +1696,10 @@ function Get-LatestCatalogPackage {
         if (-not $FileName) { $FileName = "$($Selected.Guid)_$(& $GetKb $Url).msu" }
         $Destination = Join-Path -Path $DownloadDir -ChildPath $FileName
 
+        if ((Test-Path -LiteralPath $Destination) -and -not (Test-UpdatePackageFile -Path $Destination)) {
+            Write-HostTimestamp "  The existing copy of $FileName failed its integrity check, so it is being downloaded again." -ForegroundColor Yellow
+            Remove-Item -LiteralPath $Destination -Force -ErrorAction Stop
+        }
         if (Test-Path -LiteralPath $Destination) {
             Write-HostTimestamp "  Already downloaded - reusing: $FileName" -ForegroundColor DarkGray
         }
@@ -1658,6 +1707,11 @@ function Get-LatestCatalogPackage {
             Write-HostTimestamp "  Downloading $FileName ..."
             if (-not (Get-FileDownload -Url $Url -Destination $Destination)) {
                 Write-HostTimestamp "  Failed to download $FileName." -ForegroundColor Red
+                return $null
+            }
+            if (-not (Test-UpdatePackageFile -Path $Destination)) {
+                Write-HostTimestamp "  The downloaded $FileName failed its integrity check, so it was discarded." -ForegroundColor Red
+                Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
                 return $null
             }
             Write-HostTimestamp "    Downloaded ($([math]::Round((Get-Item -LiteralPath $Destination).Length / 1MB, 1)) MB)." -ForegroundColor Green
@@ -2037,6 +2091,7 @@ function Get-CatalogLatestEntry {
         [string]$TitleInclude,
         [string]$TitleExclude,
         [switch]$AllowPreview,
+        [switch]$BaselineOnly,
         [datetime]$NotAfter      # optional upper bound - packages released after this date are excluded
     )
     $Results = Search-UpdateCatalog -Query $Query
@@ -2048,6 +2103,7 @@ function Get-CatalogLatestEntry {
     if ($PSBoundParameters.ContainsKey('NotAfter')) {
         $Filtered = $Filtered | Where-Object { $_.LastUpdated -and ([datetime]$_.LastUpdated) -le $NotAfter }
     }
+    if ($BaselineOnly) { $Filtered = $Filtered | Where-Object { Test-IsHotpatchBaseline -Entry $_ } }
     if (-not $Filtered) { return $null }
     return ($Filtered |
         Sort-Object -Property @{ Expression = { $_.LastUpdated }; Descending = $true }, @{ Expression = { $_.SizeMB }; Descending = $true } |
@@ -2092,22 +2148,13 @@ function Get-ExpectedUpdateSet {
     $script:CatalogTitles = @{}
 
     # Same queries (including the broader fallback) the download step uses, so the two always agree.
-    $Lcu = Get-CatalogLatestEntry -Query "Cumulative Update for $Product for $CatalogArch-based Systems" -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview
+    $Lcu = Get-CatalogLatestEntry -Query "Cumulative Update for $Product for $CatalogArch-based Systems" -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview -BaselineOnly:$BaselineOnly
     if (-not $Lcu -and -not $script:EffectiveServer) {
-        $Lcu = Get-CatalogLatestEntry -Query "Cumulative Update for $(Get-CatalogProductQuery) for $CatalogArch-based Systems" -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview
+        $Lcu = Get-CatalogLatestEntry -Query "Cumulative Update for $(Get-CatalogProductQuery) for $CatalogArch-based Systems" -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview -BaselineOnly:$BaselineOnly
     }
     if (-not $Lcu) { return $null }
     $script:CatalogTitles['LCU'] = $Lcu.Title
-    if ($BaselineOnly -and $Lcu.LastUpdated) {
-        $LcuRaw = Search-UpdateCatalog -Query "Cumulative Update for $Product for $CatalogArch-based Systems"
-        if ($LcuRaw -and (Test-IsHotpatchMonth -AllResults $LcuRaw -ReferenceDate ([datetime]$Lcu.LastUpdated))) {
-            $Set.Add('LCU=Skipped-BaselineOnly')
-        } else {
-            $Set.Add("LCU=$(Get-CatalogEntryTag -Entry $Lcu)")
-        }
-    } else {
-        $Set.Add("LCU=$(Get-CatalogEntryTag -Entry $Lcu)")
-    }
+    $Set.Add("LCU=$(Get-CatalogEntryTag -Entry $Lcu)")
 
     if (-not $SkipDotNet) {
         $DotNet = Get-CatalogLatestEntry -Query "Cumulative Update for .NET Framework $Product for $CatalogArch" -TitleInclude '(?i)\.net framework' -TitleExclude '(?i)dynamic update' -AllowPreview:$IncludePreview
@@ -2351,7 +2398,7 @@ function Invoke-AutoClean {
 function Get-ScheduledTaskArgumentString {
     $Excluded = @(
         'RegisterScheduledTask', 'UnregisterScheduledTask', 'Schedule', 'ScheduleTime', 'ScheduleDay',
-        'TaskName', 'TaskUsername', 'TaskPassword', 'CheckOnly', 'Force', 'ListEditions', 'Unattended', 'SkipInteractive', 'Scheduled',
+        'TaskName', 'TaskUsername', 'TaskPassword', 'PromptTaskPassword', 'CheckOnly', 'Force', 'ListEditions', 'Unattended', 'SkipInteractive', 'Scheduled',
         'ServiceWinRE', 'Server'
     )
     # -Command keeps single-quoted string literals intact; -File strips quotes and misreads
@@ -3943,6 +3990,8 @@ function Get-ScriptCommandLine {
     $Arguments = New-Object System.Collections.Generic.List[string]
     $Arguments.Add((Split-Path -Leaf $script:ScriptPath))
     foreach ($Name in @($script:ScriptBoundParameters.Keys)) {
+        # This text is written onto the media, so a password must never reach it.
+        if ($Name -eq 'TaskPassword') { continue }
         $Value = $script:ScriptBoundParameters[$Name]
         if ($Value -is [switch]) {
             if ($Value.IsPresent) { $Arguments.Add("-$Name") }
@@ -5465,7 +5514,7 @@ else {
         Write-Host $LineBreak
     }
     elseif ($script:LcuSkippedBaselineOnly) {
-        Write-HostTimestamp '  Cumulative update skipped - image stays on prior baseline for hotpatch compatibility.' -ForegroundColor Yellow
+        Write-HostTimestamp '  WARNING: no baseline cumulative update was found, so the image keeps the patch level of the source ISO. Supply the baseline package with -UpdatePath if that level is too old.' -ForegroundColor Yellow
         Write-Host $LineBreak
     }
     else {

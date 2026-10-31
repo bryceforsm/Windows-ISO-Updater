@@ -213,7 +213,7 @@ $Borrowed = @(
     'Search-UpdateCatalog',
     'Test-FidoScript',
     'Test-FidoUrl',
-    'Test-IsHotpatchMonth',
+    'Test-IsHotpatchBaseline',
     'Test-MicrosoftDownloadUrl'
 )
 $Missing = @($Borrowed | Where-Object { -not (Get-ScriptFunctionText -Name $_) })
@@ -713,35 +713,40 @@ try {
         }
     }
 
-    # --- Hotpatch month detection ---
+    # --- Hotpatch baseline detection ---
 
-    Write-Section 'Hotpatch month detection'
+    Write-Section 'Hotpatch baseline detection'
 
-    $HotpatchFn = Get-ScriptFunctionText -Name 'Test-IsHotpatchMonth'
+    $HotpatchFn = Get-ScriptFunctionText -Name 'Test-IsHotpatchBaseline'
     if (-not $HotpatchFn) {
-        Add-Result -Area 'Hotpatch' -Status 'Fail' -Message 'Test-IsHotpatchMonth was not found in the script.' -Action 'The function was renamed or removed. Update this tester.'
+        Add-Result -Area 'Hotpatch' -Status 'Fail' -Message 'Test-IsHotpatchBaseline was not found in the script.' -Action 'The function was renamed or removed. Update this tester.'
     }
     else {
         try {
             . ([scriptblock]::Create($HotpatchFn))
-            $Today = [datetime]::Today
-            $PriorMonth = $Today.AddMonths(-1)
-            $HotpatchEntry = [pscustomobject]@{ Title = 'Hotpatch Update for Windows 11'; LastUpdated = $Today.ToString('M/d/yyyy') }
-            $PriorEntry    = [pscustomobject]@{ Title = 'Hotpatch Update for Windows 11'; LastUpdated = $PriorMonth.ToString('M/d/yyyy') }
-            $NullEntry     = [pscustomobject]@{ Title = 'Regular Update'; LastUpdated = $null }
-            if (-not (Test-IsHotpatchMonth -AllResults @($HotpatchEntry) -ReferenceDate $Today)) {
-                Add-Result -Area 'Hotpatch' -Status 'Fail' -Message 'Test-IsHotpatchMonth returned false for a hotpatch entry in the current month.' -Action 'The date comparison or title regex changed. Read the function and fix it.'
+            $NovemberDate = [datetime]'2026-11-10'
+            $BaselineEntry  = [pscustomobject]@{ Title = '2026-10 Cumulative Update for Windows 11'; LastUpdated = $NovemberDate }
+            $InQuarterEntry = [pscustomobject]@{ Title = '2026-11 Cumulative Update for Windows 11'; LastUpdated = $NovemberDate }
+            $NoMonthEntry   = [pscustomobject]@{ Title = 'Cumulative Update for Windows 11'; LastUpdated = [datetime]'2026-04-14' }
+            $NullEntry      = [pscustomobject]@{ Title = 'Regular Update'; LastUpdated = $null }
+            if (-not (Test-IsHotpatchBaseline -Entry $BaselineEntry)) {
+                Add-Result -Area 'Hotpatch' -Status 'Fail' -Message 'Test-IsHotpatchBaseline returned false for an October update re-released in November.' -Action 'The title month must win over LastUpdated. Read the function and fix it.'
             }
-            elseif (Test-IsHotpatchMonth -AllResults @($PriorEntry) -ReferenceDate $Today) {
-                Add-Result -Area 'Hotpatch' -Status 'Fail' -Message 'Test-IsHotpatchMonth returned true for a prior-month hotpatch entry.' -Action 'The date comparison in Test-IsHotpatchMonth changed. Read the function and fix it.'
+            elseif (Test-IsHotpatchBaseline -Entry $InQuarterEntry) {
+                Add-Result -Area 'Hotpatch' -Status 'Fail' -Message 'Test-IsHotpatchBaseline returned true for a November update.' -Action 'The baseline month list changed. Read the function and fix it.'
+            }
+            elseif (-not (Test-IsHotpatchBaseline -Entry $NoMonthEntry)) {
+                Add-Result -Area 'Hotpatch' -Status 'Fail' -Message 'Test-IsHotpatchBaseline did not fall back to LastUpdated for a title without a month.' -Action 'Read the function and fix the fallback.'
+            }
+            elseif (Test-IsHotpatchBaseline -Entry $NullEntry) {
+                Add-Result -Area 'Hotpatch' -Status 'Fail' -Message 'Test-IsHotpatchBaseline returned true for an entry with no month at all.' -Action 'Read the function and fix it.'
             }
             else {
-                Test-IsHotpatchMonth -AllResults @($NullEntry) -ReferenceDate $Today | Out-Null
-                Add-Result -Area 'Hotpatch' -Status 'Pass' -Message 'Test-IsHotpatchMonth correctly identifies hotpatch months and handles null LastUpdated.'
+                Add-Result -Area 'Hotpatch' -Status 'Pass' -Message 'Test-IsHotpatchBaseline correctly identifies baseline months and handles null LastUpdated.'
             }
         }
         catch {
-            Add-Result -Area 'Hotpatch' -Status 'Fail' -Message "Test-IsHotpatchMonth threw unexpectedly: $($_.Exception.Message)" -Action 'The function signature changed. Read the function and update this test.'
+            Add-Result -Area 'Hotpatch' -Status 'Fail' -Message "Test-IsHotpatchBaseline threw unexpectedly: $($_.Exception.Message)" -Action 'The function signature changed. Read the function and update this test.'
         }
     }
 
