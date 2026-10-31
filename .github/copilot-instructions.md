@@ -118,6 +118,4 @@ query results".
 ## Changelog and releases
 
 Add anything a person running the script would notice under `## [Unreleased]` in `CHANGELOG.md`, in the same
-pull request as the change. To release, run `tools/Update-Changelog.ps1`, merge that change on its own in a
-pull request, then run the Release workflow on main. Any commit touching `src/` in between moves the version,
-and the workflow then refuses to run until the changelog is prepared again.
+pull request as the change. `RELEASING.md` has the steps for publishing a release.
