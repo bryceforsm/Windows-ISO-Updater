@@ -65,6 +65,7 @@ For search and easier navigation, read the documentation at [bryceforsm.github.i
 * [Unattended Setups](docs/unattended-installs.md)
 * [Architecture and Design Details](docs/design-notes.md)
 * [Technical Reference](docs/reference.md)
+* [Changelog](CHANGELOG.md)
 
 ## Reporting Issues
 

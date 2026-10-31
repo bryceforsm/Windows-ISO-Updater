@@ -36,6 +36,7 @@ nav:
   - Unattended Installs: docs/unattended-installs.md
   - Technical Reference: docs/reference.md
   - Design Notes: docs/design-notes.md
+  - Changelog: CHANGELOG.md
   - Releases: https://github.com/bryceforsm/Windows-ISO-Updater/releases
 
 theme:

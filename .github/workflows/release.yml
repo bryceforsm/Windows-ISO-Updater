@@ -1,0 +1,86 @@
+name: Release
+
+# Publishes what is already on main and writes nothing to the branch, which the ruleset only lets pull requests
+# change. tools\Update-Changelog.ps1 prepares the notes in a pull request first.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run every check and build the files, but do not publish'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    # Only this job writes, and only to create the release and its tag.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Windows PowerShell 5.1, the edition the script targets, rather than the runner's pwsh 7.
+      - name: Install test modules
+        shell: powershell
+        run: |
+          Install-Module -Name Pester -RequiredVersion 5.7.1 -Scope CurrentUser -SkipPublisherCheck -Force
+          Install-Module -Name PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Force
+
+      - name: Run PSScriptAnalyzer and Pester
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Invoke-Tests.ps1
+          exit $LASTEXITCODE
+
+      - name: Build and publish
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          if ([System.IO.File]::ReadAllText('Windows-ISO-Updater.ps1') -notmatch "(?m)^\s*\`$ScriptVersion\s*=\s*'([\d.]+)'") {
+              throw 'Could not read the version from Windows-ISO-Updater.ps1.'
+          }
+          $Version = $Matches[1]
+
+          # Native commands report failure through the exit code, which the preference above does not catch.
+          $NotesFile = Join-Path -Path $env:RUNNER_TEMP -ChildPath 'release-notes.md'
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Update-Changelog.ps1 -WriteNotesTo $NotesFile
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+          # A failed lookup is the expected answer here, so it must not stop the step.
+          $ErrorActionPreference = 'Continue'
+          & gh release view $Version --json tagName 2>&1 | Out-Null
+          $AlreadyReleased = ($LASTEXITCODE -eq 0)
+          $ErrorActionPreference = 'Stop'
+          if ($AlreadyReleased) { throw "Release $Version already exists. Merge a change that moves the version, then prepare the changelog again." }
+
+          # A batch file needs CRLF to run reliably, and this does not depend on how Git checked it out.
+          $AssetFolder = Join-Path -Path $env:RUNNER_TEMP -ChildPath 'assets'
+          New-Item -ItemType Directory -Path $AssetFolder | Out-Null
+          $Encoding = New-Object System.Text.UTF8Encoding($false)
+          $Sums = foreach ($Name in 'Run-Windows-ISO-Updater.bat', 'Windows-ISO-Updater.ps1') {
+              $Target = Join-Path -Path $AssetFolder -ChildPath $Name
+              [System.IO.File]::WriteAllText($Target, ([System.IO.File]::ReadAllText((Join-Path -Path $PWD -ChildPath $Name)) -replace '\r?\n', "`r`n"), $Encoding)
+              "$((Get-FileHash -LiteralPath $Target -Algorithm SHA256).Hash.ToLower())  $Name"
+          }
+          [System.IO.File]::WriteAllText((Join-Path -Path $AssetFolder -ChildPath 'SHA256SUMS'), (($Sums -join "`n") + "`n"), $Encoding)
+
+          Write-Host "Version $Version"
+          Get-Content -LiteralPath $NotesFile
+          $Sums
+          if ($env:DRY_RUN -eq 'true') {
+              Write-Host 'Dry run, so nothing was published.'
+              exit 0
+          }
+
+          $Assets = @(Get-ChildItem -LiteralPath $AssetFolder -File | ForEach-Object { $_.FullName })
+          & gh release create $Version @Assets --title $Version --notes-file $NotesFile --target $env:GITHUB_SHA
+          exit $LASTEXITCODE
