@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Runs PSScriptAnalyzer and the Pester tests, the same way CI does.
+    Checks the combined script matches src, then runs PSScriptAnalyzer and the Pester tests, the same way CI does.
 
 .DESCRIPTION
     Nothing here runs Windows-ISO-Updater.ps1. Exits 0 when everything passes and 1 otherwise. Needs Pester 5
@@ -16,6 +16,9 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 
 Import-Module PSScriptAnalyzer
 Import-Module Pester -MinimumVersion 5.0
+
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path -Path $PSScriptRoot -ChildPath 'Build-Script.ps1') -Check
+$BuildInSync = ($LASTEXITCODE -eq 0)
 
 $Settings = Join-Path -Path $PSScriptRoot -ChildPath 'PSScriptAnalyzerSettings.psd1'
 $Findings = @(
@@ -33,5 +36,5 @@ $Configuration.Run.PassThru = $true
 $Configuration.Output.Verbosity = 'Normal'
 $Result = Invoke-Pester -Configuration $Configuration
 
-if ($Findings.Count -gt 0 -or $Result.Result -ne 'Passed') { exit 1 }
+if (-not $BuildInSync -or $Findings.Count -gt 0 -or $Result.Result -ne 'Passed') { exit 1 }
 exit 0

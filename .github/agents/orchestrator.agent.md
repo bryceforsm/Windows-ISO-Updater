@@ -22,7 +22,7 @@ scope, and what you want back. Do not paste repository rules into it, subagents 
 
 | Request touches | Owner |
 | --- | --- |
-| `Windows-ISO-Updater.ps1` | Script Surgeon |
+| `src/`, which builds `Windows-ISO-Updater.ps1` | Script Surgeon |
 | `tools/*.ps1` or `Run-Windows-ISO-Updater.bat` | Script Surgeon |
 | `.github/workflows/*.yml` | Script Surgeon |
 | `Examples/*.xml` | Answer File Editor |

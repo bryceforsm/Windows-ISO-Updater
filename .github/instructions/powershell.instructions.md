@@ -5,8 +5,13 @@ applyTo: '**/*.ps1'
 
 # PowerShell conventions
 
-The layout, output, and step conventions below describe `Windows-ISO-Updater.ps1`. The formatting,
+The layout, output, and step conventions below describe the script built from `src/`. The formatting,
 error, and function rules apply to everything under `tools/` as well.
+
+**Source files.** Edit `src/`, then run `tools/Build-Script.ps1`. `Windows-ISO-Updater.ps1` is generated, so
+an edit made there is lost. The number in a file's name sets its position in the script: `01` to `03` are
+the header, parameters and startup, `10` to `25` the functions by topic, and `30` to `38` the main flow in
+run order. A new file only needs a name that sorts into the right place.
 
 **Layout.** Sections are wrapped in `#region Section Name` / `#endregion` so they fold in VS Code. Order
 is header comment, `param()`, elevation and platform guards, folder resolution, transcript start, helper
@@ -68,6 +73,7 @@ used the old term, in the same pass.
 Run this once instead of three round trips. It proves syntax only.
 
 ```powershell
+.\tools\Build-Script.ps1   # also refuses to write a script that does not parse
 $p = 'Windows-ISO-Updater.ps1'; $e = $null
 [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $p), [ref]$null, [ref]$e) | Out-Null
 if ($e) { $e | ForEach-Object { "$($_.Extent.StartLineNumber): $($_.Message)" } } else { 'No parse errors' }

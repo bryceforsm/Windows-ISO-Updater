@@ -31,6 +31,9 @@
     Running from the hook, only files that are already staged are stamped, and the stamped file is
     re-staged with "git add". If you staged only part of a file (git add -p), that re-stage picks up the
     rest of the file too - stamp and commit those by hand instead.
+
+    Any change to src\ stamps both src files that carry a marker and rebuilds Windows-ISO-Updater.ps1, so the
+    combined script always carries the new version. The hook refuses a hand edit to the combined script.
 #>
 [CmdletBinding()]
 param(
@@ -64,9 +67,13 @@ $ErrorActionPreference = 'Stop'
 
 # The files that carry a version marker, relative to the repository root.
 $VersionedFiles = @(
-    'Windows-ISO-Updater.ps1',
+    'src\01-Header.ps1',
+    'src\03-Startup.ps1',
     'Run-Windows-ISO-Updater.bat'
 )
+$SourceVersionedFiles = @($VersionedFiles | Where-Object { $_ -like 'src\*' })
+$CombinedScript = 'Windows-ISO-Updater.ps1'
+$BuildScript = Join-Path -Path $PSScriptRoot -ChildPath 'Build-Script.ps1'
 
 $VersionNumber = '\d{4}\.\d{2}\.\d{2}\.\d+'
 # Each marker keeps whatever prefix/suffix it already has, so only the number itself is rewritten.
@@ -173,6 +180,14 @@ if ($StagedOnly) {
     if (-not $IsGitRepo) { throw "'$RepositoryPath' is not a Git repository, so nothing can be staged." }
     $Staged = @(Invoke-Git -Arguments @('diff', '--cached', '--name-only', '--diff-filter=ACMR') | ForEach-Object { "$_".Trim() })
     $Targets = @($VersionedFiles | Where-Object { $Staged -contains ($_ -replace '\\', '/') })
+    $SourceStaged = @($Staged | Where-Object { $_ -like 'src/*' }).Count -gt 0
+    if ($SourceStaged) {
+        $Targets = @($Targets + $SourceVersionedFiles | Select-Object -Unique)
+    }
+    elseif ($Staged -contains $CombinedScript) {
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $BuildScript -Check | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "$CombinedScript is generated and has been edited by hand. Make the change in src\, then run tools\Build-Script.ps1." }
+    }
     if ($Targets.Count -eq 0) {
         Write-Info 'No versioned files are staged, so the version is left alone.' 'DarkGray'
         exit 0
@@ -222,6 +237,13 @@ foreach ($Relative in $Targets) {
     Set-FileText -Path $Path -Text $Text -HasBom $File.HasBom
     $Changed += $Relative
     Write-Info "  $Relative updated ($Hits marker(s))." 'Green'
+}
+
+# Rebuilt even when no marker moved, because the staged change may be in any file in src.
+if (-not $WhatIfOnly -and @($Targets | Where-Object { $_ -like 'src\*' }).Count -gt 0) {
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $BuildScript
+    if ($LASTEXITCODE -ne 0) { throw 'The combined script could not be built, so the commit was stopped.' }
+    $Changed += $CombinedScript
 }
 
 if ($Stage -and -not $WhatIfOnly -and $Changed.Count -gt 0) {
