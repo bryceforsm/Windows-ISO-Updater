@@ -1,6 +1,6 @@
 # GENERATED FILE. Edit the files in src\ and run tools\Build-Script.ps1, because changes made here are overwritten.
 # Windows ISO Updater
-# Version: 2026.10.31.4   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
+# Version: 2026.10.31.5   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
 #
 #region Script overview
 # This script builds a fully up-to-date ("slipstreamed") Windows 11, Windows 10 or Windows Server
@@ -293,6 +293,9 @@ param(
     [Parameter(HelpMessage = 'Password for the TaskUsername account. Never stored in the task action arguments or written to logs.')]
     [string]$TaskPassword,
 
+    [Parameter(HelpMessage = 'Path to a JSON profile holding build settings, named after these parameters, so a build can be repeated without a long command line. Anything also passed on the command line wins. Relative paths inside it are relative to the profile. Task registration, one-off actions such as -CheckOnly and passwords cannot go in a profile')]
+    [string]$ConfigPath,
+
     [Parameter(HelpMessage = 'Ask for the -TaskUsername password at startup without echoing it. Added automatically when the script relaunches itself elevated, so the password never appears on a command line')]
     [switch]$PromptTaskPassword,
 
@@ -308,7 +311,7 @@ $script:ScriptPath = $PSCommandPath
 
 # Kept in step with the header comment by tools\Update-Version.ps1, and shown in the log and recorded in
 # the build stamp so a finished ISO can be traced back to the exact script that built it.
-$ScriptVersion = '2026.10.31.4'
+$ScriptVersion = '2026.10.31.5'
 
 # A scheduled run has nobody to answer a prompt.
 if ($Scheduled) {
@@ -344,13 +347,87 @@ if ([int]($OsInfo).BuildNumber -lt 10240) {
     exit 1
 }
 
+$PathParameters = @('IsoPath', 'UpdatePath', 'UnattendPath', 'DriverPath', 'ExtraFilesPath', 'DownloadPath', 'WorkPath', 'OutputIsoPath', 'RecoveryIsoPath', 'OscdimgPath', 'LogPath', 'StampPath')
+
+# Reads a JSON profile into parameter names and values. It lives here rather than with the other functions
+# because a profile can change what the elevation check below does, and functions are not defined until later.
+# A profile describes a build, so task registration and one-off actions stay on the command line, and a file
+# on disk is no place for a password. Names starting with _ or $ are ignored, which allows comments and $schema.
+function Read-ConfigFile {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Parameters,
+        [string[]]$PathParameter
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "The profile '$Path' was not found." }
+    try { $Json = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop }
+    catch { throw "The profile '$Path' is not valid JSON: $($_.Exception.Message)" }
+    if ($Json -isnot [System.Management.Automation.PSCustomObject]) { throw "The profile '$Path' must be a JSON object of parameter names and values." }
+
+    $CommandLineOnly = @('ConfigPath', 'TaskPassword', 'PromptTaskPassword', 'TaskUsername', 'TaskName', 'RegisterScheduledTask', 'UnregisterScheduledTask',
+        'Schedule', 'ScheduleTime', 'ScheduleDay', 'Scheduled', 'CheckOnly', 'ListEditions', 'Force')
+    $CommonParameters = @([System.Management.Automation.PSCmdlet]::CommonParameters) + @([System.Management.Automation.PSCmdlet]::OptionalCommonParameters)
+    $ProfileFolder = Split-Path -Parent $Path
+
+    $Values = [ordered]@{}
+    foreach ($Property in $Json.PSObject.Properties) {
+        $Key = $Property.Name
+        if ($Key -match '^[_$]') { continue }
+        if ($CommandLineOnly -contains $Key) { throw "'$Key' in '$Path' cannot be set in a profile. Pass -$Key on the command line." }
+        if (-not $Parameters.ContainsKey($Key) -or $CommonParameters -contains $Key) { throw "'$Key' in '$Path' is not a parameter of this script." }
+
+        $Name = $Parameters[$Key].Name
+        $Type = $Parameters[$Key].ParameterType
+        $Value = $Property.Value
+        if ($null -eq $Value) { continue }
+
+        if ($Type -eq [switch]) {
+            if ($Value -isnot [bool]) { throw "'$Name' in '$Path' must be true or false." }
+            $Value = [switch]$Value
+        }
+        elseif ($Type -eq [string[]]) {
+            if (@($Value | Where-Object { $_ -isnot [string] -and $_ -isnot [int] }).Count -gt 0) { throw "'$Name' in '$Path' must be a string or a list of strings." }
+            $Value = [string[]]@($Value)
+        }
+        elseif (($Value -is [array]) -or ($Value -is [System.Management.Automation.PSCustomObject]) -or ($Value -is [bool])) {
+            throw "'$Name' in '$Path' must be a single value."
+        }
+        elseif ($Value -is [string] -and $Value -and $PathParameter -contains $Name -and -not [System.IO.Path]::IsPathRooted($Value)) {
+            $Value = [System.IO.Path]::GetFullPath((Join-Path -Path $ProfileFolder -ChildPath $Value))
+        }
+        $Values[$Name] = $Value
+    }
+    return $Values
+}
+
+# What the profile set, kept apart from the bound parameters so the elevated relaunch and a registered task
+# pass -ConfigPath and read the file again, which means later edits to the profile apply to them.
+$script:ProfileValues = [ordered]@{}
+if ($ConfigPath) {
+    try {
+        $ConfigPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ConfigPath)
+        $PSBoundParameters['ConfigPath'] = $ConfigPath
+        $ProfileEntries = Read-ConfigFile -Path $ConfigPath -Parameters $MyInvocation.MyCommand.Parameters -PathParameter $PathParameters
+        foreach ($ProfileName in @($ProfileEntries.Keys)) {
+            if ($PSBoundParameters.ContainsKey($ProfileName)) { continue }
+            # The parameter's validation attributes still apply to the variable, so a bad value fails here.
+            try { Set-Variable -Name $ProfileName -Value $ProfileEntries[$ProfileName] -ErrorAction Stop }
+            catch { throw "'$ProfileName' in '$ConfigPath' has a value this script does not accept: $($_.Exception.Message)" }
+            $script:ProfileValues[$ProfileName] = $ProfileEntries[$ProfileName]
+        }
+    }
+    catch {
+        Write-Host $_.Exception.Message -ForegroundColor Red
+        exit 1
+    }
+}
+
 # Self-elevate the script if required
 if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] 'Administrator')) {
     if ([int](Get-CimInstance -Class Win32_OperatingSystem | Select-Object -ExpandProperty BuildNumber) -ge 6000) {
         $ArgumentList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$($MyInvocation.MyCommand.Path)`"")
-        # An elevated process starts in System32, so a relative path would point at the wrong place.
-        $PathParameters = @('IsoPath', 'UpdatePath', 'UnattendPath', 'DriverPath', 'ExtraFilesPath', 'DownloadPath', 'WorkPath', 'OutputIsoPath', 'RecoveryIsoPath', 'OscdimgPath', 'LogPath', 'StampPath')
-        # Re-add any passed parameters
+        # Re-add any passed parameters. An elevated process starts in System32, so relative paths are made absolute.
         foreach ($Parameter in $PSBoundParameters.Keys) {
             if ($Parameter -eq 'TaskPassword') { continue }
             $Value = $PSBoundParameters[$Parameter]
@@ -4079,6 +4156,16 @@ function Get-ScriptCommandLine {
         $Arguments.Add("-$Name")
         foreach ($Item in @($Value)) { $Arguments.Add("`"$Item`"") }
     }
+    # Written out as well, because the profile may have changed or be gone by the time someone reads this.
+    foreach ($Name in @($script:ProfileValues.Keys)) {
+        $Value = $script:ProfileValues[$Name]
+        if ($Value -is [switch]) {
+            if ($Value.IsPresent) { $Arguments.Add("-$Name") }
+            continue
+        }
+        $Arguments.Add("-$Name")
+        foreach ($Item in @($Value)) { $Arguments.Add("`"$Item`"") }
+    }
     return ($Arguments -join ' ')
 }
 
@@ -4291,6 +4378,10 @@ function Remove-StaleRecoveryIso {
 Write-Host $LineBreak
 Write-HostTimestamp "Windows ISO Updater v$ScriptVersion (slipstream latest updates into a new ISO) on $($env:ComputerName)" -ForegroundColor Cyan
 Write-HostTimestamp "Run date       : $(Get-FriendlyDate)"
+if ($ConfigPath) {
+    Write-HostTimestamp "Profile        : $ConfigPath"
+    Write-HostTimestamp "  Settings applied from it: $(if ($script:ProfileValues.Count -gt 0) { @($script:ProfileValues.Keys) -join ', ' } else { 'none' })" -ForegroundColor DarkGray
+}
 # Recorded because culture-sensitive parsing (e.g. the catalog's "Last Updated" column) breaks only on
 # non-en-US machines, so the log needs to say what locale actually ran without asking the reporter to check.
 # Script-scoped so the build tattoo, written much later, can reuse this instead of reading it a second time.
@@ -4313,7 +4404,7 @@ if ($RecoveryIsoOnly) {
     $RecoveryIgnored = @('Edition', 'KeepEditions', 'KeepAllEditions', 'UpdatePath', 'SkipDotNet', 'SkipSetupDU', 'BaselineOnly',
         'VerifyPatchLevel', 'CompressEsd', 'FastCompression', 'UnattendPath', 'DriverPath', 'AllowUnsignedDrivers', 'ExtraFilesPath',
         'SkipTattoo', 'AnonymousTattoo', 'StripImageResidue', 'VolumeLabel', 'IsoNamePrefix', 'IsoNameSuffix', 'Force', 'NoStamp', 'StampPath') |
-        Where-Object { $script:ScriptBoundParameters.ContainsKey($_) }
+        Where-Object { $script:ScriptBoundParameters.ContainsKey($_) -or $script:ProfileValues.Contains($_) }
     if ($RecoveryIgnored) {
         Write-HostTimestamp "-RecoveryIsoOnly builds only the recovery ISO, so these are ignored: $((@($RecoveryIgnored) | ForEach-Object { "-$_" }) -join ', ')" -ForegroundColor Yellow
     }

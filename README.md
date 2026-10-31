@@ -30,6 +30,11 @@ To verify a download, compare `Get-FileHash .\Windows-ISO-Updater.ps1` with the 
 .\Run-Windows-ISO-Updater.bat -IsoPath "C:\ISOs\Win11.iso" -Edition "Windows 11 Pro" -Unattended
 ```
 
+**Repeatable Build from a [JSON Profile](docs/usage.md#using-a-json-profile):**
+```bat
+.\Run-Windows-ISO-Updater.bat -ConfigPath "D:\Profiles\win11.json"
+```
+
 **Windows Server Build:**
 ```bat
 .\Run-Windows-ISO-Updater.bat -IsoPath "C:\ISOs\Server2025.iso"

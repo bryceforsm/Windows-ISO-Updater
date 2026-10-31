@@ -6,6 +6,7 @@ The script supports the following optional parameters:
 
 | Parameter | Description |
 |---|---|
+| `-ConfigPath` | Path to a JSON profile holding build settings, named after these parameters. Anything also passed on the command line wins. Relative paths inside it are relative to the profile. See [Using a JSON Profile](usage.md#using-a-json-profile) for what can go in one. |
 | `-Unattended` | Runs the script without any confirmation prompts. |
 | `-IsoPath` | Path to an existing Windows ISO to update instead of downloading one from Microsoft. May also be a **folder**, in which case the most recently modified `.iso` over 3 GB directly inside it is used by default. That search is **not recursive**, so an ISO in a subfolder is not found. Omit the parameter entirely and the same rule is applied to the download folder. An ISO on a cloud-synced or network path is copied to the download folder first. |
 | `-UseLargestIso` | When `-IsoPath` (or the download folder) is a directory holding more than one `.iso`, pick the largest one instead of the most recently modified one. |

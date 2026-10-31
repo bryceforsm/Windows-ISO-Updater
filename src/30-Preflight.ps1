@@ -2,6 +2,10 @@
 Write-Host $LineBreak
 Write-HostTimestamp "Windows ISO Updater v$ScriptVersion (slipstream latest updates into a new ISO) on $($env:ComputerName)" -ForegroundColor Cyan
 Write-HostTimestamp "Run date       : $(Get-FriendlyDate)"
+if ($ConfigPath) {
+    Write-HostTimestamp "Profile        : $ConfigPath"
+    Write-HostTimestamp "  Settings applied from it: $(if ($script:ProfileValues.Count -gt 0) { @($script:ProfileValues.Keys) -join ', ' } else { 'none' })" -ForegroundColor DarkGray
+}
 # Recorded because culture-sensitive parsing (e.g. the catalog's "Last Updated" column) breaks only on
 # non-en-US machines, so the log needs to say what locale actually ran without asking the reporter to check.
 # Script-scoped so the build tattoo, written much later, can reuse this instead of reading it a second time.
@@ -24,7 +28,7 @@ if ($RecoveryIsoOnly) {
     $RecoveryIgnored = @('Edition', 'KeepEditions', 'KeepAllEditions', 'UpdatePath', 'SkipDotNet', 'SkipSetupDU', 'BaselineOnly',
         'VerifyPatchLevel', 'CompressEsd', 'FastCompression', 'UnattendPath', 'DriverPath', 'AllowUnsignedDrivers', 'ExtraFilesPath',
         'SkipTattoo', 'AnonymousTattoo', 'StripImageResidue', 'VolumeLabel', 'IsoNamePrefix', 'IsoNameSuffix', 'Force', 'NoStamp', 'StampPath') |
-        Where-Object { $script:ScriptBoundParameters.ContainsKey($_) }
+        Where-Object { $script:ScriptBoundParameters.ContainsKey($_) -or $script:ProfileValues.Contains($_) }
     if ($RecoveryIgnored) {
         Write-HostTimestamp "-RecoveryIsoOnly builds only the recovery ISO, so these are ignored: $((@($RecoveryIgnored) | ForEach-Object { "-$_" }) -join ', ')" -ForegroundColor Yellow
     }

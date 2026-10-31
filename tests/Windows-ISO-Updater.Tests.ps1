@@ -4,7 +4,7 @@ BeforeAll {
     $ScriptFile = Join-Path -Path $PSScriptRoot -ChildPath '..\Windows-ISO-Updater.ps1'
     $Ast = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path -LiteralPath $ScriptFile).Path, [ref]$null, [ref]$null)
     $Names = @(
-        'ConvertFrom-HotpatchCalendar', 'Format-ShortHash', 'Get-BuildParameterHash', 'Get-DefaultIsoName', 'Get-EditionRank', 'Get-EditionShortName',
+        'ConvertFrom-HotpatchCalendar', 'Read-ConfigFile', 'Format-ShortHash', 'Get-BuildParameterHash', 'Get-DefaultIsoName', 'Get-EditionRank', 'Get-EditionShortName',
         'Get-FileDownload', 'Get-HotpatchBaselineKb', 'Get-PatchTuesdayStart', 'Get-ScheduledTaskArgumentString', 'Get-ScriptCommandLine', 'Get-TextSha256',
         'Resolve-EditionIndexes', 'Search-UpdateCatalog', 'Select-DefaultEditions', 'Select-HotpatchBaselineEntry', 'Test-FidoUrl', 'Test-IsHotpatchBaseline',
         'Test-MicrosoftDownloadUrl', 'Test-RebuildNeeded', 'Test-UpdatePackageFile'
@@ -344,8 +344,107 @@ Describe 'Test-RebuildNeeded' {
     }
 }
 
+Describe 'Read-ConfigFile' {
+    BeforeAll {
+        # Reads the real parameter block. Get-Command only parses the script and does not run it.
+        $script:RealParameters = (Get-Command -Name (Resolve-Path -LiteralPath (Join-Path -Path $PSScriptRoot -ChildPath '..\Windows-ISO-Updater.ps1')).Path).Parameters
+        $script:ProfileFile = Join-Path -Path $TestDrive -ChildPath 'profile.json'
+        function Read-TestProfile {
+            param([string]$Json)
+            [System.IO.File]::WriteAllText($script:ProfileFile, $Json)
+            Read-ConfigFile -Path $script:ProfileFile -Parameters $script:RealParameters -PathParameter @('IsoPath', 'WorkPath')
+        }
+    }
+
+    It 'converts each kind of value to its parameter type' {
+        $Values = Read-TestProfile '{ "Language": "English", "KeepIsoCount": 5, "AutoClean": true, "SkipDotNet": false, "KeepEditions": ["Pro", "Home"] }'
+        $Values['Language'] | Should -Be 'English'
+        $Values['KeepIsoCount'] | Should -Be 5
+        $Values['AutoClean'].IsPresent | Should -BeTrue
+        $Values['SkipDotNet'].IsPresent | Should -BeFalse
+        $Values['KeepEditions'] | Should -Be @('Pro', 'Home')
+    }
+
+    It 'accepts a single string for a list parameter' {
+        $Values = Read-TestProfile '{ "KeepEditions": "Pro" }'
+        , $Values['KeepEditions'] | Should -BeOfType [string[]]
+    }
+
+    It 'uses the spelling of the real parameter name' {
+        @((Read-TestProfile '{ "autoclean": true }').Keys) | Should -Be @('AutoClean')
+    }
+
+    It 'makes a relative path relative to the profile' {
+        (Read-TestProfile '{ "IsoPath": "isos\\a.iso" }')['IsoPath'] | Should -Be (Join-Path -Path $TestDrive -ChildPath 'isos\a.iso')
+    }
+
+    It 'leaves an absolute path alone' {
+        (Read-TestProfile '{ "WorkPath": "D:\\WISO" }')['WorkPath'] | Should -Be 'D:\WISO'
+    }
+
+    It 'ignores comments, $schema and nulls' {
+        (Read-TestProfile '{ "_comment": "x", "$schema": "y", "Language": null }').Count | Should -Be 0
+    }
+
+    It 'refuses <Name> because it belongs on the command line' -TestCases @(
+        @{ Name = 'ConfigPath' }, @{ Name = 'TaskPassword' }, @{ Name = 'PromptTaskPassword' }, @{ Name = 'TaskUsername' }, @{ Name = 'TaskName' }
+        @{ Name = 'RegisterScheduledTask' }, @{ Name = 'UnregisterScheduledTask' }, @{ Name = 'Schedule' }, @{ Name = 'ScheduleTime' }, @{ Name = 'ScheduleDay' }
+        @{ Name = 'Scheduled' }, @{ Name = 'CheckOnly' }, @{ Name = 'ListEditions' }, @{ Name = 'Force' }
+    ) {
+        $script:RealParameters.ContainsKey($Name) | Should -BeTrue
+        { Read-TestProfile "{ `"$Name`": `"x`" }" } | Should -Throw '*cannot be set in a profile*'
+    }
+
+    It 'refuses <Json>' -TestCases @(
+        @{ Json = '{ "IsoPth": "a.iso" }'; Message = '*not a parameter*' }
+        @{ Json = '{ "Verbose": true }'; Message = '*not a parameter*' }
+        @{ Json = '{ "AutoClean": "yes" }'; Message = '*true or false*' }
+        @{ Json = '{ "Language": ["a", "b"] }'; Message = '*single value*' }
+        @{ Json = '{ "Language": true }'; Message = '*single value*' }
+        @{ Json = '{ "KeepEditions": [true] }'; Message = '*list of strings*' }
+        @{ Json = '["IsoPath"]'; Message = '*JSON object*' }
+        @{ Json = '{ not json'; Message = '*not valid JSON*' }
+        @{ Json = ''; Message = '*JSON object*' }
+    ) {
+        { Read-TestProfile $Json } | Should -Throw $Message
+    }
+
+    It 'refuses a missing file' {
+        { Read-ConfigFile -Path (Join-Path -Path $TestDrive -ChildPath 'missing.json') -Parameters $script:RealParameters } | Should -Throw '*was not found*'
+    }
+
+    It 'loads the example profile' {
+        $Example = Join-Path -Path $PSScriptRoot -ChildPath '..\Examples\profile-win11-monthly.json'
+        $Values = Read-ConfigFile -Path (Resolve-Path -LiteralPath $Example).Path -Parameters $script:RealParameters -PathParameter @('IsoPath')
+        $Values['KeepEditions'].Count | Should -Be 2
+    }
+}
+
+Describe 'Recorded command lines with a profile' {
+    It 'writes out what the profile set, leaving out switches set to false' {
+        $script:ScriptPath = 'C:\Tools\Windows-ISO-Updater.ps1'
+        $script:ScriptBoundParameters = @{ ConfigPath = 'D:\p.json' }
+        $script:ProfileValues = [ordered]@{ Language = 'English'; AutoClean = [switch]$true; SkipDotNet = [switch]$false }
+        $Line = Get-ScriptCommandLine
+        $Line | Should -Match '-ConfigPath "D:\\p\.json"'
+        $Line | Should -Match '-Language "English"'
+        $Line | Should -Match '-AutoClean'
+        $Line | Should -Not -Match 'SkipDotNet'
+    }
+
+    It 'keeps only -ConfigPath in the scheduled task, so later profile edits apply' {
+        $script:ScriptPath = 'C:\Tools\Windows-ISO-Updater.ps1'
+        $script:ScriptBoundParameters = @{ ConfigPath = 'D:\p.json' }
+        $script:ProfileValues = [ordered]@{ Language = 'English' }
+        $Line = Get-ScheduledTaskArgumentString
+        $Line | Should -Match "-ConfigPath 'D:\\p\.json'"
+        $Line | Should -Not -Match 'Language'
+    }
+}
+
 Describe 'Passwords stay out of recorded command lines' {
     BeforeEach {
+        $script:ProfileValues = [ordered]@{}
         $script:ScriptPath = 'C:\Tools\Windows-ISO-Updater.ps1'
         $script:ScriptBoundParameters = @{
             IsoPath            = 'D:\a.iso'

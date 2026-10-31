@@ -5,7 +5,7 @@
 A single-purpose Windows automation repo. `Windows-ISO-Updater.ps1` takes a Windows client or Server ISO,
 services the images inside it offline with DISM (LCU, .NET, Setup and Safe OS Dynamic Updates), and
 recompiles a bootable ISO with `oscdimg.exe`. `Run-Windows-ISO-Updater.bat` is the double-click entry
-point, `docs/` is the manual, `Examples/` holds four answer files, `tools/Update-Version.ps1` stamps
+point, `docs/` is the manual, `Examples/` holds four answer files and a JSON profile, `tools/Update-Version.ps1` stamps
 versions from a git hook, `tools/Sync-EmbeddedDriverScripts.ps1` re-mirrors the driver payloads into
 `Examples/autounattend-ultimate.xml`, and `tools/Test-Dependencies.ps1` checks that the external things
 the script pins (oscdimg hash, Fido, the MCT and ADK fwlinks, the Update Catalog HTML) are still valid.

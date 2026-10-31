@@ -18,6 +18,16 @@ function Get-ScriptCommandLine {
         $Arguments.Add("-$Name")
         foreach ($Item in @($Value)) { $Arguments.Add("`"$Item`"") }
     }
+    # Written out as well, because the profile may have changed or be gone by the time someone reads this.
+    foreach ($Name in @($script:ProfileValues.Keys)) {
+        $Value = $script:ProfileValues[$Name]
+        if ($Value -is [switch]) {
+            if ($Value.IsPresent) { $Arguments.Add("-$Name") }
+            continue
+        }
+        $Arguments.Add("-$Name")
+        foreach ($Item in @($Value)) { $Arguments.Add("`"$Item`"") }
+    }
     return ($Arguments -join ' ')
 }
 

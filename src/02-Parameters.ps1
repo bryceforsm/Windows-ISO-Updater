@@ -222,6 +222,9 @@ param(
     [Parameter(HelpMessage = 'Password for the TaskUsername account. Never stored in the task action arguments or written to logs.')]
     [string]$TaskPassword,
 
+    [Parameter(HelpMessage = 'Path to a JSON profile holding build settings, named after these parameters, so a build can be repeated without a long command line. Anything also passed on the command line wins. Relative paths inside it are relative to the profile. Task registration, one-off actions such as -CheckOnly and passwords cannot go in a profile')]
+    [string]$ConfigPath,
+
     [Parameter(HelpMessage = 'Ask for the -TaskUsername password at startup without echoing it. Added automatically when the script relaunches itself elevated, so the password never appears on a command line')]
     [switch]$PromptTaskPassword,
 
