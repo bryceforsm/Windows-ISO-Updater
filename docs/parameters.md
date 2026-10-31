@@ -49,8 +49,8 @@ The script supports the following optional parameters:
 | `-SkipOscdimgDownload` | Do not download a standalone `oscdimg.exe` from Microsoft's symbol server. Require the Windows ADK instead. |
 | `-InstallAdk` | If `oscdimg.exe` is not found and cannot be downloaded, download and silently install the ADK Deployment Tools from Microsoft. |
 | `-UseFido` | Download the ISO with the Fido helper when you have not supplied one. **Off by default**, because Microsoft blocks Fido's link requests often enough that passing your own ISO is the more reliable way to run the script ([why](design-notes.md#why-the-iso-has-to-come-from-you)). |
-| `-FidoUrl` | Override the URL used to fetch the Fido download helper. Must still point at the official `github.com/pbatard/Fido` repository. |
-| `-FidoSha256` | Pin the expected SHA-256 of `Fido.ps1` so only that reviewed version is ever run. |
+| `-FidoUrl` | Override the URL used to fetch the Fido download helper. Defaults to one pinned commit. Must still point at the official `github.com/pbatard/Fido` repository. |
+| `-FidoSha256` | Expected SHA-256 of `Fido.ps1`. Defaults to the pinned version. Pass an empty string to skip the hash check, which is needed if you override `-FidoUrl` without giving the new hash. |
 | `-FidoRetryCount` | Extra attempts to make when Fido cannot resolve a download link (Microsoft's anti-bot check is often transient). Defaults to `2`, and `0` disables retrying. |
 | `-UseMct` | Get the ISO with Microsoft's Media Creation Tool instead of supplying one yourself or using `-UseFido`. MCT has no headless mode, so you click through its last few pages and save the ISO into the download folder. |
 | `-MctUrl` | Override the URL used to download the Media Creation Tool. Must still be an official Microsoft URL. |

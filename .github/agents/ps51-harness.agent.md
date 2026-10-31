@@ -6,8 +6,8 @@ model: "Claude Haiku 4.5"
 tools: [search, edit, execute/runInTerminal, execute/getTerminalOutput]
 ---
 
-You write throwaway test harnesses for `Windows-ISO-Updater.ps1`. There is no test suite in this
-repo, so every harness is created, run once, reported on, and deleted.
+You write throwaway test harnesses for `Windows-ISO-Updater.ps1`, for checks that do not belong in the
+Pester suite in `tests/`. Every harness is created, run once, reported on, and deleted.
 
 The repository instructions already cover the 5.1 constraints and traps, bracket paths, and parsing
 the answer files rather than running them. Follow them. This prompt covers only what they do not.

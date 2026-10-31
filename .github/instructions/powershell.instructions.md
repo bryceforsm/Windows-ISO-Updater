@@ -12,7 +12,7 @@ error, and function rules apply to everything under `tools/` as well.
 is header comment, `param()`, elevation and platform guards, folder resolution, transcript start, helper
 functions, then the main flow. Every function definition lives inside the single outer `#region Functions`,
 which is subdivided by topic (downloads, catalog, stamps, mount recovery, servicing and so on), so the
-whole ~2,600 lines of helpers collapse to one line and leave the main flow readable. Close a region with a
+whole ~3,800 lines of helpers collapse to one line and leave the main flow readable. Close a region with a
 bare `#endregion`, and put a blank line between one region and the next.
 
 **Parameters.** Every parameter gets a `HelpMessage` written as a full sentence, plus `ValidateSet`,
@@ -51,7 +51,7 @@ Invoke-Task 'Mounting the install image' {
 why it outlives the function. Everything else is PascalCase local scope.
 
 **Functions.** Approved verbs only. Keep them pure enough to be extractable by AST for testing, which is
-how this repo tests things.
+how this repo tests things. Lasting tests go in `tests/`, and `tools/Invoke-Tests.ps1` runs them.
 
 **Errors.** `throw` for anything fatal, with a message that says what to do about it. `exit 1` for
 failure, `exit 0` for success, and `exit 10` specifically for `-CheckOnly` deciding a rebuild is needed.

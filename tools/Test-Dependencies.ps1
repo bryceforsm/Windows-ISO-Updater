@@ -230,9 +230,8 @@ function Write-HostTimestamp {
     )
     Write-Detail $Message
 }
-# Test-FidoScript honours this pin when it is set, and the script leaves it empty by default.
-# Keep the script's default in scope so the injected helper sees the same contract, even though this harness does not run Fido itself.
-$FidoSha256 = ''
+# Test-FidoScript reads this pin from its caller's scope, so the script's default has to be in scope here.
+$FidoSha256 = Get-ScriptParameterDefault -Name 'FidoSha256'
 $null = $FidoSha256
 
 # The extract is nothing but function definitions, so materialising it defines them and runs no script logic.
@@ -345,7 +344,19 @@ try {
             # This is the script's own gate, so a failure here is exactly what a real run would hit.
             if (Test-FidoScript -Path $FidoFile) {
                 Add-Result -Area 'Fido' -Status 'Pass' -Message "Fido v$FidoVersion passes every check the script makes before running it."
-                Write-Detail "Pin this build with -FidoSha256 $FidoHash"
+
+                # A pin never breaks on its own, so a Microsoft change that Fido has already fixed upstream would otherwise go unnoticed.
+                $UpstreamFile = Join-Path -Path $TempRoot -ChildPath 'Fido-upstream.ps1'
+                try {
+                    Invoke-WebRequest -Uri 'https://github.com/pbatard/Fido/raw/master/Fido.ps1' -OutFile $UpstreamFile -UseBasicParsing -TimeoutSec $TimeoutSec -ErrorAction Stop
+                    $UpstreamHash = (Get-FileHash -LiteralPath $UpstreamFile -Algorithm SHA256).Hash
+                    if ($UpstreamHash -ne $FidoHash) {
+                        Add-Result -Area 'Fido' -Status 'Warn' -Message 'Fido has changed upstream since the pinned commit.' -Action "Review the upstream diff, then update the -FidoUrl commit and set -FidoSha256 to $UpstreamHash."
+                    }
+                }
+                catch {
+                    Add-Result -Area 'Fido' -Status 'Warn' -Message "Could not compare the pin with upstream Fido: $($_.Exception.Message)" -Action 'This says nothing about the pinned copy. It is checked again on the next run.'
+                }
             }
             else {
                 Add-Result -Area 'Fido' -Status 'Fail' -Message 'The published Fido no longer passes the script''s pre-execution checks (the reason is in the detail lines above).' -Action 'Read the failing check in Test-FidoScript. If Fido legitimately started using something on the $Banned list, that list needs revisiting. Do not relax the checks without reading the diff.'

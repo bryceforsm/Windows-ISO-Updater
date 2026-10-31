@@ -6,9 +6,9 @@ Installing Windows from this updated media saves time by eliminating large post-
 
 ## Key Features
 
-* **Safe Execution**: All operations occur within an isolated temporary directory (`C:\WISO-Work` by default). The host system configuration remains untouched.
+* **Safe Execution**: All servicing happens inside a working folder (`C:\WISO-Work` by default), never on the running Windows. Outside that folder it only changes the host when asked to, with `-InstallAdk` or `-RegisterScheduledTask`, or if a mount cannot be released, when it registers a boot task that clears the mount and deletes itself.
 * **No Manual ADK Setup Needed**: Automatically fetches a verified copy of `oscdimg.exe` from Microsoft servers to compile the media.
-* **Official Sources Only**: Downloads packages directly from Microsoft endpoints over HTTPS.
+* **Official Sources by Default**: Downloads packages directly from Microsoft endpoints over HTTPS. The one exception is the optional `-UseFido` ISO download, which fetches a community helper from GitHub, pinned by hash.
 * **Windows Server Support**: Compatible with Windows Server media, detected automatically from the image.
 * **Secure Boot Ready**: Microsoft's signed boot files are kept as they are, so the ISO boots with Secure Boot on ([writing it to USB](docs/usage.md#writing-the-iso-to-a-usb-stick)).
 
@@ -20,6 +20,8 @@ Installing Windows from this updated media saves time by eliminating large post-
 2. Put an official Windows ISO in `C:\WISO-Work\Downloads` or specify its location with `-IsoPath`.
 3. Right-click `Run-Windows-ISO-Updater.bat` and select **Run as administrator**.
 4. Confirm the build settings displayed in the console prompt.
+
+To verify a download, compare `Get-FileHash .\Windows-ISO-Updater.ps1` with the `SHA256SUMS` file attached to the release.
 
 ### Command Examples
 

@@ -7,6 +7,8 @@ applyTo: .github/workflows/**
 
 `dependency-check.yml` is a thin wrapper around `tools/Test-Dependencies.ps1`. Most edits to one need a
 matching edit to the other, so read the relevant part of the tester before changing the workflow.
+`tests.yml` wraps `tools/Invoke-Tests.ps1` in the same way. `release-checksums.yml` is the only workflow
+that writes to releases, so its `contents: write` stays on the job.
 
 ## Security
 

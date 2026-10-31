@@ -2,19 +2,21 @@
 
 ## What this repo is
 
-A single-purpose Windows automation repo. `Windows-ISO-Updater.ps1` downloads a Windows 10 or 11 ISO,
-services the images inside it offline with DISM (LCU, .NET, Setup Dynamic Update, optional WinRE), and
+A single-purpose Windows automation repo. `Windows-ISO-Updater.ps1` takes a Windows client or Server ISO,
+services the images inside it offline with DISM (LCU, .NET, Setup and Safe OS Dynamic Updates), and
 recompiles a bootable ISO with `oscdimg.exe`. `Run-Windows-ISO-Updater.bat` is the double-click entry
 point, `docs/` is the manual, `Examples/` holds four answer files, `tools/Update-Version.ps1` stamps
 versions from a git hook, `tools/Sync-EmbeddedDriverScripts.ps1` re-mirrors the driver payloads into
 `Examples/autounattend-ultimate.xml`, and `tools/Test-Dependencies.ps1` checks that the external things
 the script pins (oscdimg hash, Fido, the MCT and ADK fwlinks, the Update Catalog HTML) are still valid.
+`tools/Invoke-Tests.ps1` runs PSScriptAnalyzer and the Pester tests in `tests/`, which lift functions out
+of the script's AST and never run it.
 
-There is no build, no test suite, and no package manifest. The script is the product.
+There is no build and no package manifest. The script is the product.
 
 ## Finding your way around, read this before searching
 
-`Windows-ISO-Updater.ps1` is around 5,100 lines, roughly 80k tokens. Never read it end to end, and do not
+`Windows-ISO-Updater.ps1` is over 6,500 lines, roughly 100k tokens. Never read it end to end, and do not
 read overlapping chunks hoping to land on the right part.
 
 Start with the one search that returns the whole map:

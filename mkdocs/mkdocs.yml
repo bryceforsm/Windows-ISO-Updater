@@ -16,7 +16,12 @@ exclude_docs: |
   /mkdocs/*
   !/mkdocs/assets/
   /site/
+  /tests/
   /tools/
+
+# With --strict in the Docs workflow, a link to a heading that no longer exists fails the build.
+validation:
+  anchors: warn
 
 # Reached from the README's license link rather than the sidebar.
 not_in_nav: |

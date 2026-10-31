@@ -48,7 +48,7 @@ It leans on the community [Fido](https://github.com/pbatard/Fido) helper, which 
 
 The block is usually per-IP and temporary, so `-UseFido` retries a few times with a growing delay (`-FidoRetryCount`, two extra attempts by default), and the script can then offer Microsoft's Media Creation Tool because MCT talks to different servers and often still works. Both are workarounds for a problem you can avoid outright, and neither is something to build a monthly routine on.
 
-Making the download opt-in also keeps third-party code out of a default run. Fido is not signed, so the script has to verify its source, size, contents and behaviour before executing it (see [Important Notes](../README.md#important-notes)). None of that happens unless you ask for it.
+Making the download opt-in also keeps third-party code out of a default run. Fido is not signed, so the script pins one commit by SHA-256 and also checks its source, size, contents and behaviour before executing it. None of that happens unless you ask for it.
 
 **Download the ISO once, keep it, and point every build at it.** Get it from [microsoft.com/software-download](https://www.microsoft.com/software-download), the Media Creation Tool, the Microsoft Evaluation Center, your Volume Licensing Service Center or a Visual Studio subscription:
 

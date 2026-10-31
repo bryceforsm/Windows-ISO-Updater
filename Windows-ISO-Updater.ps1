@@ -1,12 +1,12 @@
 # Windows ISO Updater
-# Version: 2026.10.31.1   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
+# Version: 2026.10.31.2   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
 #
 #region Script overview
 # This script builds a fully up-to-date ("slipstreamed") Windows 11, Windows 10 or Windows Server
 # 2016-2025 installation ISO.
-# It downloads the latest official Microsoft ISO, downloads the latest cumulative update(s) from the
-# Microsoft Update Catalog, integrates those updates directly into the Windows images inside the ISO,
-# and then recompiles a brand-new, bootable ISO that already contains this month's patches.
+# It takes an official Microsoft ISO, downloads the latest cumulative update(s) from the Microsoft Update
+# Catalog, integrates those updates directly into the Windows images inside the ISO, and then recompiles a
+# brand-new, bootable ISO that already contains this month's patches.
 #
 # Building patched media means a fresh install (or in-place upgrade) starts already updated, instead of
 # spending an hour downloading and installing the same cumulative update after Setup finishes.
@@ -63,8 +63,8 @@
 # How to Run .PS1 Script with PowerShell:
 # NOTE: It is recommended to use the "Run-Windows-ISO-Updater.bat" to invoke this script. However, you can run the .PS1 directly if needed.
 # 1.  Open PowerShell as an Administrator: Right-click your Start Menu and select "Terminal (Admin)".
-# 2.  Enable Script Execution (if needed): Set-ExecutionPolicy Bypass -Force
-# 3.  Run the Script: Right-click the saved "Windows-ISO-Updater.ps1" file and select "Run with PowerShell".
+# 2.  Enable Script Execution for this window only (if needed): Set-ExecutionPolicy Bypass -Scope Process -Force
+# 3.  Run the Script from that window: .\Windows-ISO-Updater.ps1
 # -------------------------------------------------
 #endregion
 
@@ -201,10 +201,10 @@ param(
     [switch]$UseFido,
 
     [Parameter(HelpMessage = 'Override the URL used to fetch the Fido download helper')]
-    [string]$FidoUrl = 'https://github.com/pbatard/Fido/raw/master/Fido.ps1',
+    [string]$FidoUrl = 'https://github.com/pbatard/Fido/raw/61668a81d1d9be66fae413352591196a780168a7/Fido.ps1',
 
-    [Parameter(HelpMessage = 'Expected SHA-256 of Fido.ps1. Set this to pin one reviewed version. By default the script only verifies its source and contents')]
-    [string]$FidoSha256,
+    [Parameter(HelpMessage = 'Expected SHA-256 of the downloaded Fido.ps1. Defaults to the pinned version. Pass an empty string to skip the hash check (needed if you override -FidoUrl without giving the new hash)')]
+    [string]$FidoSha256 = '6481E40D3CF100C79B281942D0D1C7F6D111397BE296FEC867A56CBE368EBDF9',
 
     [Parameter(HelpMessage = 'How many extra attempts to make if Fido cannot resolve a download link (Microsoft''s anti-bot check often clears on a later attempt). Defaults to 2')]
     [ValidateRange(0, 10)]
@@ -307,7 +307,7 @@ $script:ScriptPath = $PSCommandPath
 
 # Kept in step with the header comment by tools\Update-Version.ps1, and shown in the log and recorded in
 # the build stamp so a finished ISO can be traced back to the exact script that built it.
-$ScriptVersion = '2026.10.31.1'
+$ScriptVersion = '2026.10.31.2'
 
 # A scheduled run has nobody to answer a prompt.
 if ($Scheduled) {
@@ -950,7 +950,7 @@ function Test-FidoUrl {
 
 # Validates a downloaded Fido.ps1 BEFORE it is executed. Fido is not code-signed, so there is no
 # signature to check, so instead this confirms the file really is Fido and contains nothing that Fido has
-# any business doing. Checks, in order: an optional pinned SHA-256 (-FidoSha256), a sane file size, that
+# any business doing. Checks, in order: the pinned SHA-256 (-FidoSha256), a sane file size, that
 # it parses as PowerShell, that it carries Fido's header and -GetUrl parameter, and that it invokes no
 # code-execution, persistence or security-tampering commands. Parsing only builds an AST - it never runs
 # the script. Returns $true if the file passes.
