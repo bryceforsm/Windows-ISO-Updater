@@ -1,5 +1,5 @@
 # Windows ISO Updater
-# Version: 2026.10.31.2   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
+# Version: 2026.10.31.3   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
 #
 #region Script overview
 # This script builds a fully up-to-date ("slipstreamed") Windows 11, Windows 10 or Windows Server
@@ -121,7 +121,7 @@ param(
     [Parameter(HelpMessage = 'Deprecated and ignored. Recovery image servicing is on by default now, so use -SkipWinRE to turn it off. Accepted so existing scheduled tasks and wrapper scripts that still pass it keep running')]
     [switch]$ServiceWinRE,
 
-    [Parameter(HelpMessage = 'Integrate the newest cumulative update from a hotpatch baseline month (January, April, July or October) rather than the newest overall, so in any other month the image is built to the most recent baseline. Use only for Windows 11 Enterprise 25H2 media enrolled in Intune or Azure Arc hotpatch.')]
+    [Parameter(HelpMessage = 'Integrate the latest hotpatch baseline named by Microsoft''s hotpatch calendar rather than the newest cumulative update. If the calendar cannot be read, the newest security update from January, April, July or October is used with a warning. Use only for Windows 11 Enterprise 25H2 media enrolled in Intune or Azure Arc hotpatch.')]
     [switch]$BaselineOnly,
 
     [Parameter(HelpMessage = 'Allow the optional preview updates Microsoft publishes late in the month (titled "... Preview of Monthly Quality Rollup" or "Cumulative Update Preview") to be selected. They are excluded by default because they are next month''s fixes released early for testing, so they carry a higher build than anything Windows Update will offer the finished media. Useful for validating a coming update, not for production media')]
@@ -307,7 +307,7 @@ $script:ScriptPath = $PSCommandPath
 
 # Kept in step with the header comment by tools\Update-Version.ps1, and shown in the log and recorded in
 # the build stamp so a finished ISO can be traced back to the exact script that built it.
-$ScriptVersion = '2026.10.31.2'
+$ScriptVersion = '2026.10.31.3'
 
 # A scheduled run has nobody to answer a prompt.
 if ($Scheduled) {
@@ -1550,12 +1550,90 @@ function Get-KbTargetBuilds {
 
 function Test-IsHotpatchBaseline {
     param([Parameter(Mandatory)][object]$Entry)
-    # The month in the title wins, because a re-released package gets a newer LastUpdated. The cumulative
-    # update query never returns hotpatch titles, so the calendar is the only usable signal.
+    # Microsoft's planned baseline months, for when its calendar cannot be read. The month in the title wins,
+    # because a re-released package gets a newer LastUpdated.
     if ("$($Entry.Title)" -match '^\d{4}-(\d{2})\b') { $Month = [int]$Matches[1] }
     elseif ($Entry.LastUpdated) { $Month = ([datetime]$Entry.LastUpdated).Month }
     else { return $false }
     return (@(1, 4, 7, 10) -contains $Month)
+}
+
+# Reads the newest baseline that has a KB out of the hotpatch calendar's HTML. Later months are listed before
+# they ship with an empty KB cell, so those rows drop out on their own.
+function ConvertFrom-HotpatchCalendar {
+    param([string]$Html)
+
+    $Baselines = foreach ($Row in [regex]::Matches("$Html", '(?is)<tr\b.*?</tr>')) {
+        $Cells = @([regex]::Matches($Row.Value, '(?is)<td\b[^>]*>(.*?)</td>') | ForEach-Object { ($_.Groups[1].Value -replace '<[^>]+>', '').Trim() })
+        if (-not ($Cells | Where-Object { $_ -match '(?i)^baseline' })) { continue }
+        $Release = $Cells | Where-Object { $_ -match '^20\d{2}\.\d{2}\b' } | Select-Object -First 1
+        $Kb = $Cells | Where-Object { $_ -match '(?i)^KB\d{6,}$' } | Select-Object -First 1
+        if ($Release -and $Kb) {
+            [pscustomobject]@{ Release = $Release.Substring(0, 7); Kb = $Kb.Substring(2) }
+        }
+    }
+    return ($Baselines | Sort-Object -Property Release -Descending | Select-Object -First 1)
+}
+
+# Asks Microsoft's hotpatch calendar for the latest baseline, because the Update Catalog does not mark
+# baselines and Microsoft adds extra ones outside the planned months. Windows 11 24H2 and later share these
+# KBs, so one page serves them all. The answer is kept for the run, including a failure, so the warning
+# appears once. Returns $null when the page cannot be read or has stopped being kept up to date.
+function Get-HotpatchBaselineKb {
+    param([string]$Url = 'https://support.microsoft.com/en-us/servicing/os/hotpatch/windows-11/2025/release-notes-for-hotpatch-on-windows-11-enterprise-version-25h2')
+
+    if ($script:HotpatchBaselineChecked) { return $script:HotpatchBaseline }
+    $script:HotpatchBaselineChecked = $true
+    $script:HotpatchBaseline = $null
+
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        $Baseline = ConvertFrom-HotpatchCalendar -Html (Invoke-WebRequest -Uri $Url -UseBasicParsing -ErrorAction Stop).Content
+    }
+    catch {
+        Write-HostTimestamp "  Could not read Microsoft's hotpatch calendar: $($_.Exception.Message)" -ForegroundColor Yellow
+        return $null
+    }
+    if (-not $Baseline) {
+        Write-HostTimestamp "  Microsoft's hotpatch calendar was read, but no baseline could be found in it." -ForegroundColor Yellow
+        return $null
+    }
+
+    # Baselines are never more than three months apart, so anything older means the page is no longer current.
+    $Now = Get-Date
+    $AgeInMonths = (($Now.Year * 12) + $Now.Month) - (([int]$Baseline.Release.Substring(0, 4) * 12) + [int]$Baseline.Release.Substring(5, 2))
+    if ($AgeInMonths -gt 4) {
+        Write-HostTimestamp "  The newest baseline in Microsoft's hotpatch calendar is $($Baseline.Release), which is too old to trust." -ForegroundColor Yellow
+        return $null
+    }
+
+    Write-HostTimestamp "  Microsoft's hotpatch calendar names KB$($Baseline.Kb) ($($Baseline.Release)) as the latest baseline." -ForegroundColor DarkGray
+    $script:HotpatchBaseline = $Baseline
+    return $Baseline
+}
+
+# Narrows catalog results to the hotpatch baseline. The calendar's KB is searched for directly, since the
+# general query only returns 25 rows. Without one, the newest security update from a planned month is the best
+# guess. "Security Updates" keeps out-of-band releases out, and the warning says the choice is unconfirmed.
+function Select-HotpatchBaselineEntry {
+    param(
+        [Parameter(Mandatory)][string]$Query,
+        [object[]]$Candidates,
+        [string]$TitleInclude,
+        [string]$TitleExclude
+    )
+
+    $Baseline = Get-HotpatchBaselineKb
+    if ($Baseline) {
+        $Exact = @(Search-UpdateCatalog -Query "$Query KB$($Baseline.Kb)" | Where-Object { $_.Title -match "(?i)\bKB$($Baseline.Kb)\b" })
+        if ($TitleInclude) { $Exact = @($Exact | Where-Object { $_.Title -match $TitleInclude }) }
+        if ($TitleExclude) { $Exact = @($Exact | Where-Object { $_.Title -notmatch $TitleExclude }) }
+        if ($Exact.Count -gt 0) { return $Exact }
+        Write-HostTimestamp "  The catalog has no KB$($Baseline.Kb) for this release." -ForegroundColor Yellow
+    }
+
+    Write-HostTimestamp '  WARNING: the baseline could not be confirmed, so the newest security update from January, April, July or October is being used. A baseline Microsoft added outside those months would be missed.' -ForegroundColor Yellow
+    return @($Candidates | Where-Object { $_.Classification -eq 'Security Updates' -and (Test-IsHotpatchBaseline -Entry $_) })
 }
 
 # Finds the newest cumulative update in the catalog for a given search query, downloads it to the download
@@ -1601,9 +1679,9 @@ function Get-LatestCatalogPackage {
         return $null
     }
     if ($BaselineOnly) {
-        $Filtered = $Filtered | Where-Object { Test-IsHotpatchBaseline -Entry $_ }
+        $Filtered = Select-HotpatchBaselineEntry -Query $Query -Candidates @($Filtered) -TitleInclude $TitleInclude -TitleExclude $TitleExclude
         if (-not $Filtered) {
-            Write-HostTimestamp '  -BaselineOnly: the catalog results hold no January, April, July or October cumulative update.' -ForegroundColor Yellow
+            Write-HostTimestamp '  -BaselineOnly: the catalog results hold no baseline cumulative update.' -ForegroundColor Yellow
             $script:LcuSkippedBaselineOnly = $true
             return $null
         }
@@ -2103,7 +2181,7 @@ function Get-CatalogLatestEntry {
     if ($PSBoundParameters.ContainsKey('NotAfter')) {
         $Filtered = $Filtered | Where-Object { $_.LastUpdated -and ([datetime]$_.LastUpdated) -le $NotAfter }
     }
-    if ($BaselineOnly) { $Filtered = $Filtered | Where-Object { Test-IsHotpatchBaseline -Entry $_ } }
+    if ($BaselineOnly -and $Filtered) { $Filtered = Select-HotpatchBaselineEntry -Query $Query -Candidates @($Filtered) -TitleInclude $TitleInclude -TitleExclude $TitleExclude }
     if (-not $Filtered) { return $null }
     return ($Filtered |
         Sort-Object -Property @{ Expression = { $_.LastUpdated }; Descending = $true }, @{ Expression = { $_.SizeMB }; Descending = $true } |

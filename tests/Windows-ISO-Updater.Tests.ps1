@@ -4,10 +4,10 @@ BeforeAll {
     $ScriptFile = Join-Path -Path $PSScriptRoot -ChildPath '..\Windows-ISO-Updater.ps1'
     $Ast = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path -LiteralPath $ScriptFile).Path, [ref]$null, [ref]$null)
     $Names = @(
-        'Format-ShortHash', 'Get-BuildParameterHash', 'Get-DefaultIsoName', 'Get-EditionRank', 'Get-EditionShortName',
-        'Get-FileDownload', 'Get-PatchTuesdayStart', 'Get-ScheduledTaskArgumentString', 'Get-ScriptCommandLine', 'Get-TextSha256',
-        'Resolve-EditionIndexes', 'Select-DefaultEditions', 'Test-FidoUrl', 'Test-IsHotpatchBaseline', 'Test-MicrosoftDownloadUrl',
-        'Test-RebuildNeeded', 'Test-UpdatePackageFile'
+        'ConvertFrom-HotpatchCalendar', 'Format-ShortHash', 'Get-BuildParameterHash', 'Get-DefaultIsoName', 'Get-EditionRank', 'Get-EditionShortName',
+        'Get-FileDownload', 'Get-HotpatchBaselineKb', 'Get-PatchTuesdayStart', 'Get-ScheduledTaskArgumentString', 'Get-ScriptCommandLine', 'Get-TextSha256',
+        'Resolve-EditionIndexes', 'Search-UpdateCatalog', 'Select-DefaultEditions', 'Select-HotpatchBaselineEntry', 'Test-FidoUrl', 'Test-IsHotpatchBaseline',
+        'Test-MicrosoftDownloadUrl', 'Test-RebuildNeeded', 'Test-UpdatePackageFile'
     )
     foreach ($Name in $Names) {
         $Definition = $Ast.Find({
@@ -95,6 +95,99 @@ Describe 'Test-IsHotpatchBaseline' {
 
     It 'is false with no month at all' {
         Test-IsHotpatchBaseline -Entry ([pscustomobject]@{ Title = 'Cumulative Update'; LastUpdated = $null }) | Should -BeFalse
+    }
+}
+
+Describe 'The hotpatch calendar' {
+    BeforeAll {
+        # Row markup copied from Microsoft's page, including an unplanned baseline and months not yet shipped.
+        function New-CalendarRow {
+            param($Month, $Release, $Type, $Kb)
+            $KbCell = if ($Kb) { "<a href=`"/en-us/help/$Kb`" data-linktype=`"absolute-path`">KB$Kb</a>" } else { '' }
+            "<tr>`n<td>$Month</td>`n<td>$Release B</td>`n<td>$Type</td>`n<td>$KbCell</td>`n</tr>"
+        }
+        $Year = (Get-Date).Year
+        $script:CurrentRelease = (Get-Date).ToString('yyyy.MM')
+        $script:CalendarHtml = (
+            '<table><thead><tr><th>Month</th><th>Update</th><th>Type</th><th>KB</th></tr></thead><tbody>',
+            (New-CalendarRow 'January' "$($Year - 1).01" 'Baseline (Restart)' '5000001'),
+            (New-CalendarRow 'August' "$($Year - 1).08" 'Hotpatch' '5000002'),
+            (New-CalendarRow 'Now' $script:CurrentRelease 'Baseline (Restart)' '5000003'),
+            (New-CalendarRow 'Next' "$($Year + 1).01" 'Baseline (Restart)' $null),
+            (New-CalendarRow 'After' "$($Year + 1).02" 'Hotpatch' $null),
+            '</tbody></table>'
+        ) -join "`n"
+    }
+
+    BeforeEach {
+        $script:HotpatchBaselineChecked = $false
+        $script:HotpatchBaseline = $null
+    }
+
+    It 'takes the newest baseline that has a KB' {
+        $Baseline = ConvertFrom-HotpatchCalendar -Html $script:CalendarHtml
+        $Baseline.Kb | Should -Be '5000003'
+        $Baseline.Release | Should -Be $script:CurrentRelease
+    }
+
+    It 'ignores a hotpatch month even when it is the newest row with a KB' {
+        $Html = (New-CalendarRow 'A' '2026.07' 'Baseline (Restart)' '5000010') + (New-CalendarRow 'B' '2026.08' 'Hotpatch' '5000011')
+        (ConvertFrom-HotpatchCalendar -Html $Html).Kb | Should -Be '5000010'
+    }
+
+    It 'honors a baseline outside the planned months' {
+        $Html = (New-CalendarRow 'A' '2026.07' 'Baseline (Restart)' '5000010') + (New-CalendarRow 'B' '2026.09' 'Baseline (Restart)' '5000012')
+        (ConvertFrom-HotpatchCalendar -Html $Html).Kb | Should -Be '5000012'
+    }
+
+    It 'finds nothing in a page without the table' {
+        ConvertFrom-HotpatchCalendar -Html '<html><body>Moved</body></html>' | Should -BeNullOrEmpty
+    }
+
+    It 'returns nothing when the page cannot be fetched' {
+        Mock Invoke-WebRequest { throw 'blocked' }
+        Get-HotpatchBaselineKb | Should -BeNullOrEmpty
+    }
+
+    It 'distrusts a calendar that has stopped being updated' {
+        Mock Invoke-WebRequest { [pscustomobject]@{ Content = New-CalendarRow 'A' '2020.01' 'Baseline (Restart)' '5000010' } }
+        Get-HotpatchBaselineKb | Should -BeNullOrEmpty
+    }
+
+    It 'only fetches the page once in a run' {
+        Mock Invoke-WebRequest { [pscustomobject]@{ Content = $script:CalendarHtml } }
+        (Get-HotpatchBaselineKb).Kb | Should -Be '5000003'
+        (Get-HotpatchBaselineKb).Kb | Should -Be '5000003'
+        Should -Invoke Invoke-WebRequest -Times 1 -Exactly
+    }
+
+    Context 'Selecting the package' {
+        BeforeAll {
+            $script:OutOfBand = [pscustomobject]@{ Title = '2026-10 Cumulative Update (KB5134133)'; Classification = 'Updates'; LastUpdated = [datetime]'2026-10-26' }
+            $script:October = [pscustomobject]@{ Title = '2026-10 Cumulative Update (KB5127648)'; Classification = 'Security Updates'; LastUpdated = [datetime]'2026-10-13' }
+            $script:September = [pscustomobject]@{ Title = '2026-09 Cumulative Update (KB5124008)'; Classification = 'Security Updates'; LastUpdated = [datetime]'2026-09-08' }
+        }
+
+        It 'searches for the KB the calendar names' {
+            Mock Invoke-WebRequest { [pscustomobject]@{ Content = New-CalendarRow 'Now' (Get-Date).ToString('yyyy.MM') 'Baseline (Restart)' '5124008' } }
+            Mock Search-UpdateCatalog { @($script:September) }
+            $Selected = Select-HotpatchBaselineEntry -Query 'Cumulative Update' -Candidates @($script:OutOfBand, $script:October)
+            $Selected.Title | Should -Match 'KB5124008'
+            Should -Invoke Search-UpdateCatalog -ParameterFilter { $Query -eq 'Cumulative Update KB5124008' }
+        }
+
+        It 'falls back to a planned-month security update, passing over out-of-band ones' {
+            Mock Invoke-WebRequest { throw 'blocked' }
+            $Selected = @(Select-HotpatchBaselineEntry -Query 'Cumulative Update' -Candidates @($script:OutOfBand, $script:October, $script:September))
+            $Selected.Count | Should -Be 1
+            $Selected[0].Title | Should -Match 'KB5127648'
+        }
+
+        It 'falls back when the catalog has no package for the KB' {
+            Mock Invoke-WebRequest { [pscustomobject]@{ Content = New-CalendarRow 'Now' (Get-Date).ToString('yyyy.MM') 'Baseline (Restart)' '5999999' } }
+            Mock Search-UpdateCatalog { @() }
+            (Select-HotpatchBaselineEntry -Query 'Cumulative Update' -Candidates @($script:October)).Title | Should -Match 'KB5127648'
+        }
     }
 }
 

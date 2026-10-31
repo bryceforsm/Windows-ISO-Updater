@@ -210,6 +210,8 @@ $Borrowed = @(
     'Get-KbTargetBuilds',
     'Get-ScheduledTaskArgumentString',
     'Get-UpdateCatalogDownloadUrl',
+    'ConvertFrom-HotpatchCalendar',
+    'Get-HotpatchBaselineKb',
     'Search-UpdateCatalog',
     'Test-FidoScript',
     'Test-FidoUrl',
@@ -758,6 +760,26 @@ try {
         }
         catch {
             Add-Result -Area 'Hotpatch' -Status 'Fail' -Message "Test-IsHotpatchBaseline threw unexpectedly: $($_.Exception.Message)" -Action 'The function signature changed. Read the function and update this test.'
+        }
+    }
+
+    # --- Hotpatch calendar ---
+
+    Write-Section 'Hotpatch calendar (Microsoft support page)'
+
+    # Without this page -BaselineOnly falls back to a guess, so a redesign has to be noticed here first.
+    $CalendarBaseline = Get-HotpatchBaselineKb
+    if (-not $CalendarBaseline) {
+        Add-Result -Area 'Hotpatch' -Status 'Fail' -Message 'The latest baseline could not be read from the hotpatch calendar (the reason is in the detail lines above).' -Action 'If the page moved or its table changed, update Get-HotpatchBaselineKb and ConvertFrom-HotpatchCalendar. Until then -BaselineOnly falls back to the planned months.'
+    }
+    else {
+        $BaselineTitle = "(?i)\bKB$($CalendarBaseline.Kb)\b"
+        $BaselineRows = @(Search-UpdateCatalog -Query "Cumulative Update for Windows 11 Version 25H2 for x64-based Systems KB$($CalendarBaseline.Kb)" | Where-Object { $_.Title -match $BaselineTitle })
+        if ($BaselineRows.Count -eq 0) {
+            Add-Result -Area 'Hotpatch' -Status 'Warn' -Message "The calendar names KB$($CalendarBaseline.Kb), but the catalog has no 25H2 x64 package for it." -Action 'Check whether the catalog search wording changed or the package is still being published.'
+        }
+        else {
+            Add-Result -Area 'Hotpatch' -Status 'Pass' -Message "The calendar names KB$($CalendarBaseline.Kb) ($($CalendarBaseline.Release)), and the catalog has it: $($BaselineRows[0].Title)"
         }
     }
 

@@ -216,7 +216,7 @@ None of those came out of a prompt. They came out of having been bitten before, 
 
 ## Offline Servicing and Hot-Patch Eligibility
 
-Windows 11 25H2 Enterprise supports hot-patching through Intune or Azure Arc on a quarterly cadence. January, April, July and October require a full cumulative update baseline. The two months after each of them receive lightweight in-memory hot patches that do not rewrite image files on disk.
+Windows 11 25H2 Enterprise supports hot-patching through Intune or Azure Arc on a quarterly cadence. January, April, July and October are planned as full cumulative update baselines, and Microsoft adds extra ones when a security issue calls for it, as it did in June and September 2026. The other months receive lightweight in-memory hot patches that do not rewrite image files on disk.
 
 Hotpatch updates cannot be applied offline via DISM at all. A regular cumulative update replaces binaries on disk, which is exactly what DISM's offline package injection does. A hotpatch instead modifies already-loaded code in the running kernel's address space and has no files to swap into a WIM image, so there is nothing for DISM to inject. The intended workflow is to offline-service the ISO with the baseline CU using `-BaselineOnly`, deploy the image, enroll the device in Intune or Azure Arc hotpatch policy, and let Windows Update deliver the in-quarter hotpatches to the live system at runtime.
 
@@ -226,10 +226,12 @@ If the integrated LCU is a non-baseline (in-quarter) update, the resulting image
 
 For environments where hot-patch eligibility is a hard requirement, two postures are reliable:
 
-- **Service against a known baseline CU.** Build against the cumulative update from a baseline month (January, April, July or October). The resulting image starts at baseline level and is eligible for hot patches in the months that follow.
+- **Service against a known baseline CU.** Build against the latest baseline on [Microsoft's hotpatch calendar](https://support.microsoft.com/en-us/servicing/os/hotpatch/windows-11/2025/release-notes-for-hotpatch-on-windows-11-enterprise-version-25h2). The resulting image starts at baseline level and is eligible for hot patches in the months that follow.
 - **Deploy a lightly-patched image and patch online first.** Build the ISO against any available LCU, deploy the machine, and let Windows Update apply the current LCU through the normal online stack before enrolling the device in Intune hot-patch policy. This guarantees that CBS state is established the way Microsoft's hot-patch stack expects.
 
-The script also provides a `-BaselineOnly` switch for automating the first posture. When set, it selects the newest cumulative update published for a baseline month, so a build in November still gets October's update, whatever patch level the source ISO started from. The calendar decides this rather than the catalog, because a cumulative update search does not return hotpatch titles. If the catalog results hold no baseline update, the run warns and the image keeps the source ISO's patch level.
+The script also provides a `-BaselineOnly` switch for automating the first posture. When set, it reads the latest baseline KB from Microsoft's hotpatch calendar and fetches that package from the Update Catalog, so a build in November still gets October's baseline, whatever patch level the source ISO started from. The calendar has to decide because the catalog cannot: baselines carry ordinary cumulative update titles, and hotpatch packages do not appear in its search results. A later out-of-band update is passed over too, because it is not the baseline.
+
+If the calendar cannot be read, is out of date, or names a KB the catalog does not have for this release, the run warns and falls back to the newest security update from January, April, July or October. That can miss a baseline Microsoft added outside those months. If there is no such update either, the image keeps the source ISO's patch level.
 
 This is a known tradeoff in offline servicing, not a defect in this tool.
 
