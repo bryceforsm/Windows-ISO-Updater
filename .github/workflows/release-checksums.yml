@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing release tag to add SHA256SUMS to'
+        description: 'Existing release tag to add SHA256SUMS.txt to'
         required: true
 
 permissions:
@@ -22,7 +22,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Attach SHA256SUMS
+      - name: Attach SHA256SUMS.txt
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -31,6 +31,6 @@ jobs:
           mkdir assets
           cd assets
           gh release download "$RELEASE_TAG" --pattern '*.ps1' --pattern '*.bat'
-          sha256sum -- * > SHA256SUMS
-          cat SHA256SUMS
-          gh release upload "$RELEASE_TAG" SHA256SUMS --clobber
+          sha256sum -- * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          gh release upload "$RELEASE_TAG" SHA256SUMS.txt --clobber

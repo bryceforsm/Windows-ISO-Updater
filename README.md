@@ -21,7 +21,7 @@ Installing Windows from this updated media saves time by eliminating large post-
 3. Right-click `Run-Windows-ISO-Updater.bat` and select **Run as administrator**.
 4. Confirm the build settings displayed in the console prompt.
 
-To verify a download, compare `Get-FileHash .\Windows-ISO-Updater.ps1` with the `SHA256SUMS` file attached to the release.
+To verify a download, compare `Get-FileHash .\Windows-ISO-Updater.ps1` with the `SHA256SUMS.txt` file attached to the release.
 
 ### Command Examples
 
@@ -65,7 +65,7 @@ For search and easier navigation, read the documentation at [bryceforsm.github.i
 * [Unattended Setups](docs/unattended-installs.md)
 * [Architecture and Design Details](docs/design-notes.md)
 * [Technical Reference](docs/reference.md)
-* [Changelog](CHANGELOG.md)
+* [Change Log](CHANGELOG.md)
 
 ## Reporting Issues
 

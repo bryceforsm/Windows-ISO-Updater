@@ -41,6 +41,8 @@ It also publishes the repo's `LICENSE` as a `license/` page that is left out of 
 the README's license link at it. Without that, a file with no `.md` extension is only copied as a raw
 download.
 
+The `## [Unreleased]` heading in `CHANGELOG.md` is also left off the site when the section has no entries.
+
 ## Building locally
 
 From the repo root:

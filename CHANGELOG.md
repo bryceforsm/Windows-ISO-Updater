@@ -1,10 +1,14 @@
-# Changelog
+# Change Log
 
 What changed in each release. Versions are dates, `yyyy.MM.dd.<revision>`. Releases before this file was added are described on the [Releases page](https://github.com/bryceforsm/Windows-ISO-Updater/releases).
 
 ## [Unreleased]
 
-## [2026.10.31.5] - 2026-10-31
+### Changed
+
+- The checksum file attached to each release is now `SHA256SUMS.txt`, so Windows opens it without asking which app to use. `2026.10.31.5` keeps its `SHA256SUMS` file.
+
+## [2026.10.31.5](https://github.com/bryceforsm/Windows-ISO-Updater/releases/tag/2026.10.31.5) - 2026-10-31
 
 ### Added
 

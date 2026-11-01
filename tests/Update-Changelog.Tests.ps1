@@ -28,7 +28,7 @@ Describe 'Update-Changelog' {
         (Invoke-ChangelogTool).ExitCode | Should -Be 0
         $Text = [System.IO.File]::ReadAllText($script:Changelog)
         $Today = Get-Date -Format 'yyyy-MM-dd'
-        $Text | Should -BeExactly "# Changelog`n`n## [Unreleased]`n`n## [2026.11.01.2] - $Today`n`n### Fixed`n`n- A bug`n`n## [2026.10.01.1] - 2026-10-01`n`n- Old`n"
+        $Text | Should -BeExactly "# Changelog`n`n## [Unreleased]`n`n## [2026.11.01.2](https://github.com/bryceforsm/Windows-ISO-Updater/releases/tag/2026.11.01.2) - $Today`n`n### Fixed`n`n- A bug`n`n## [2026.10.01.1] - 2026-10-01`n`n- Old`n"
     }
 
     It 'keeps CRLF line endings' {
@@ -55,7 +55,7 @@ Describe 'Update-Changelog' {
 
     It 'writes only the current version''s notes, intact, without changing the changelog' {
         $LongLine = '- ' + ('long ' * 60).Trim()
-        $Text = "## [Unreleased]`n`n- Later`n`n## [2026.11.01.2] - 2026-11-01`n`n### Fixed`n`n$LongLine`n`n## [2026.10.01.1]`n`n- Old`n"
+        $Text = "## [Unreleased]`n`n- Later`n`n## [2026.11.01.2](https://example.test/2026.11.01.2) - 2026-11-01`n`n### Fixed`n`n$LongLine`n`n## [2026.10.01.1]`n`n- Old`n"
         Set-Changelog $Text
         $Notes = Join-Path -Path $script:Repo -ChildPath 'notes.md'
         (Invoke-ChangelogTool -Arguments @('-WriteNotesTo', $Notes)).ExitCode | Should -Be 0
