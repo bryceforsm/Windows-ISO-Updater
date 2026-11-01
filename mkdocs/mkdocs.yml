@@ -13,10 +13,17 @@ site_dir: ../site
 # LICENSE becomes a page through hooks.py, and its raw copy would collide with it on Windows.
 exclude_docs: |
   /LICENSE
+  /RELEASING.md
   /mkdocs/*
   !/mkdocs/assets/
   /site/
+  /src/
+  /tests/
   /tools/
+
+# With --strict in the Docs workflow, a link to a heading that no longer exists fails the build.
+validation:
+  anchors: warn
 
 # Reached from the README's license link rather than the sidebar.
 not_in_nav: |
@@ -30,6 +37,7 @@ nav:
   - Unattended Installs: docs/unattended-installs.md
   - Technical Reference: docs/reference.md
   - Design Notes: docs/design-notes.md
+  - Changelog: CHANGELOG.md
   - Releases: https://github.com/bryceforsm/Windows-ISO-Updater/releases
 
 theme:

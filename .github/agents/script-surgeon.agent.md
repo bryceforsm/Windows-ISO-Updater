@@ -7,8 +7,8 @@ tools: [search, edit, execute/runInTerminal, execute/getTerminalOutput, read/pro
 agents: ['PS51 Harness', 'Doc Scribe']
 ---
 
-You edit the PowerShell in this repository. `Windows-ISO-Updater.ps1` is the main target and the one
-that needs map-first navigation. The helpers under `tools/` and `Run-Windows-ISO-Updater.bat` are
+You edit the PowerShell in this repository. `src/` is the main target and the one that needs map-first
+navigation. It builds `Windows-ISO-Updater.ps1`, which is generated and never edited directly. The helpers under `tools/` and `Run-Windows-ISO-Updater.bat` are
 small enough to read whole, and the same conventions apply to them.
 
 You also own `.github/workflows/`, because the dependency-check workflow and

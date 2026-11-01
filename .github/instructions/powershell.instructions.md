@@ -5,14 +5,19 @@ applyTo: '**/*.ps1'
 
 # PowerShell conventions
 
-The layout, output, and step conventions below describe `Windows-ISO-Updater.ps1`. The formatting,
+The layout, output, and step conventions below describe the script built from `src/`. The formatting,
 error, and function rules apply to everything under `tools/` as well.
+
+**Source files.** Edit `src/`, then run `tools/Build-Script.ps1`. `Windows-ISO-Updater.ps1` is generated, so
+an edit made there is lost. The number in a file's name sets its position in the script: `01` to `03` are
+the header, parameters and startup, `10` to `25` the functions by topic, and `30` to `38` the main flow in
+run order. A new file only needs a name that sorts into the right place.
 
 **Layout.** Sections are wrapped in `#region Section Name` / `#endregion` so they fold in VS Code. Order
 is header comment, `param()`, elevation and platform guards, folder resolution, transcript start, helper
 functions, then the main flow. Every function definition lives inside the single outer `#region Functions`,
 which is subdivided by topic (downloads, catalog, stamps, mount recovery, servicing and so on), so the
-whole ~2,600 lines of helpers collapse to one line and leave the main flow readable. Close a region with a
+whole ~3,800 lines of helpers collapse to one line and leave the main flow readable. Close a region with a
 bare `#endregion`, and put a blank line between one region and the next.
 
 **Parameters.** Every parameter gets a `HelpMessage` written as a full sentence, plus `ValidateSet`,
@@ -51,7 +56,7 @@ Invoke-Task 'Mounting the install image' {
 why it outlives the function. Everything else is PascalCase local scope.
 
 **Functions.** Approved verbs only. Keep them pure enough to be extractable by AST for testing, which is
-how this repo tests things.
+how this repo tests things. Lasting tests go in `tests/`, and `tools/Invoke-Tests.ps1` runs them.
 
 **Errors.** `throw` for anything fatal, with a message that says what to do about it. `exit 1` for
 failure, `exit 0` for success, and `exit 10` specifically for `-CheckOnly` deciding a rebuild is needed.
@@ -68,6 +73,7 @@ used the old term, in the same pass.
 Run this once instead of three round trips. It proves syntax only.
 
 ```powershell
+.\tools\Build-Script.ps1   # also refuses to write a script that does not parse
 $p = 'Windows-ISO-Updater.ps1'; $e = $null
 [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $p), [ref]$null, [ref]$e) | Out-Null
 if ($e) { $e | ForEach-Object { "$($_.Extent.StartLineNumber): $($_.Message)" } } else { 'No parse errors' }

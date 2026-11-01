@@ -7,6 +7,11 @@ applyTo: .github/workflows/**
 
 `dependency-check.yml` is a thin wrapper around `tools/Test-Dependencies.ps1`. Most edits to one need a
 matching edit to the other, so read the relevant part of the tester before changing the workflow.
+`tests.yml` wraps `tools/Invoke-Tests.ps1` in the same way. `release.yml` and `release-checksums.yml` are the
+only workflows that write to releases, so their `contents: write` stays on the job. The ruleset on main only
+accepts pull requests, so no workflow can commit there. A release created with the workflow token does not
+start other workflows, which is why `release.yml` writes `SHA256SUMS` itself, and `release-checksums.yml`
+covers releases made by hand.
 
 ## Security
 

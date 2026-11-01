@@ -1,0 +1,46 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'Windows-ISO-Updater.ps1'
+      - 'src/**'
+      - 'tests/**'
+      - 'tools/**'
+      - '.github/workflows/tests.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'Windows-ISO-Updater.ps1'
+      - 'src/**'
+      - 'tests/**'
+      - 'tools/**'
+      - '.github/workflows/tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Windows PowerShell 5.1, the edition the script targets, rather than the runner's pwsh 7.
+      # -SkipPublisherCheck because the Pester 3 that ships with Windows is signed by a different publisher.
+      - name: Install test modules
+        shell: powershell
+        run: |
+          Install-Module -Name Pester -RequiredVersion 5.7.1 -Scope CurrentUser -SkipPublisherCheck -Force
+          Install-Module -Name PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Force
+
+      - name: Run PSScriptAnalyzer and Pester
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Invoke-Tests.ps1
+          exit $LASTEXITCODE

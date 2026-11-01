@@ -1,0 +1,36 @@
+name: Release checksums
+
+# Hashes the files attached to the release, because those are what people actually download.
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to add SHA256SUMS to'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  checksums:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Only this job writes, and only to the release it was started for.
+    permissions:
+      contents: write
+    steps:
+      - name: Attach SHA256SUMS
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        run: |
+          mkdir assets
+          cd assets
+          gh release download "$RELEASE_TAG" --pattern '*.ps1' --pattern '*.bat'
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+          gh release upload "$RELEASE_TAG" SHA256SUMS --clobber

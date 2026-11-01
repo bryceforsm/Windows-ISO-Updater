@@ -23,6 +23,7 @@ on:
   push:
     paths:
       - 'Windows-ISO-Updater.ps1'
+      - 'src/**'
       - 'tools/Test-Dependencies.ps1'
       - '.github/workflows/dependency-check.yml'
 

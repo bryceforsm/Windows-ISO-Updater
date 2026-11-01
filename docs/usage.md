@@ -32,6 +32,41 @@ Relative paths such as `.\Examples\autounattend-lab-admin.xml` are read from the
 
 The full list is in [Command-Line Parameters](parameters.md).
 
+## Using a JSON Profile
+
+A profile keeps the settings for a build in a file, so you can repeat it without a long command line and keep one file per image. Each name is a [parameter](parameters.md) without its leading dash:
+
+```json
+{
+  "_comment": "Monthly Windows 11 build",
+  "IsoPath": "D:\\ISOs\\Win11_25H2_original.iso",
+  "WorkPath": "D:\\WISO\\Win11",
+  "KeepEditions": ["Windows 11 Enterprise", "Windows 11 Pro"],
+  "AutoClean": true,
+  "KeepIsoCount": 3
+}
+```
+
+```bat
+.\Run-Windows-ISO-Updater.bat -ConfigPath "D:\Profiles\win11.json"
+
+:: The command line wins, so this one run leaves the .NET update out
+.\Run-Windows-ISO-Updater.bat -ConfigPath "D:\Profiles\win11.json" -SkipDotNet
+```
+
+- Switches take `true` or `false`, and a parameter that takes several values can take a JSON list. Backslashes in paths have to be doubled.
+- Relative paths are relative to the profile, not to the folder you ran from.
+- Names starting with `_` or `$` are ignored, which is how to leave a comment. Any other name that is not a parameter stops the run, so a typo cannot quietly be ignored.
+- These stay on the command line, and the run stops if a profile sets one: `-RegisterScheduledTask`, `-UnregisterScheduledTask`, `-Schedule`, `-ScheduleTime`, `-ScheduleDay`, `-TaskName`, `-TaskUsername`, `-TaskPassword`, `-Scheduled`, `-CheckOnly`, `-ListEditions` and `-Force`. A profile describes a build rather than one run of it, and a password does not belong in a file.
+
+A scheduled task keeps only the path to the profile, so later edits to the file apply to its next run, and an edit that changes what goes in the ISO triggers a rebuild like any other changed setting. If the file is moved or deleted, the task's run fails:
+
+```bat
+.\Run-Windows-ISO-Updater.bat -ConfigPath "D:\Profiles\win11.json" -RegisterScheduledTask -Schedule PatchTuesday
+```
+
+[`Examples/profile-win11-monthly.json`](../Examples/profile-win11-monthly.json) is a starting point. Unless `-AnonymousTattoo` is on, the build record on the ISO lists what the profile set, so the ISO still says how it was built if the file later changes.
+
 ## Updating a Windows Server ISO
 
 Server media is serviced exactly like client media, with no switch to announce it: the script reads the

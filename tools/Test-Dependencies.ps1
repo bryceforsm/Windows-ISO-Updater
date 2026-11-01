@@ -210,10 +210,12 @@ $Borrowed = @(
     'Get-KbTargetBuilds',
     'Get-ScheduledTaskArgumentString',
     'Get-UpdateCatalogDownloadUrl',
+    'ConvertFrom-HotpatchCalendar',
+    'Get-HotpatchBaselineKb',
     'Search-UpdateCatalog',
     'Test-FidoScript',
     'Test-FidoUrl',
-    'Test-IsHotpatchMonth',
+    'Test-IsHotpatchBaseline',
     'Test-MicrosoftDownloadUrl'
 )
 $Missing = @($Borrowed | Where-Object { -not (Get-ScriptFunctionText -Name $_) })
@@ -230,9 +232,8 @@ function Write-HostTimestamp {
     )
     Write-Detail $Message
 }
-# Test-FidoScript honours this pin when it is set, and the script leaves it empty by default.
-# Keep the script's default in scope so the injected helper sees the same contract, even though this harness does not run Fido itself.
-$FidoSha256 = ''
+# Test-FidoScript reads this pin from its caller's scope, so the script's default has to be in scope here.
+$FidoSha256 = Get-ScriptParameterDefault -Name 'FidoSha256'
 $null = $FidoSha256
 
 # The extract is nothing but function definitions, so materialising it defines them and runs no script logic.
@@ -345,7 +346,19 @@ try {
             # This is the script's own gate, so a failure here is exactly what a real run would hit.
             if (Test-FidoScript -Path $FidoFile) {
                 Add-Result -Area 'Fido' -Status 'Pass' -Message "Fido v$FidoVersion passes every check the script makes before running it."
-                Write-Detail "Pin this build with -FidoSha256 $FidoHash"
+
+                # A pin never breaks on its own, so a Microsoft change that Fido has already fixed upstream would otherwise go unnoticed.
+                $UpstreamFile = Join-Path -Path $TempRoot -ChildPath 'Fido-upstream.ps1'
+                try {
+                    Invoke-WebRequest -Uri 'https://github.com/pbatard/Fido/raw/master/Fido.ps1' -OutFile $UpstreamFile -UseBasicParsing -TimeoutSec $TimeoutSec -ErrorAction Stop
+                    $UpstreamHash = (Get-FileHash -LiteralPath $UpstreamFile -Algorithm SHA256).Hash
+                    if ($UpstreamHash -ne $FidoHash) {
+                        Add-Result -Area 'Fido' -Status 'Warn' -Message 'Fido has changed upstream since the pinned commit.' -Action "Review the upstream diff, then update the -FidoUrl commit and set -FidoSha256 to $UpstreamHash."
+                    }
+                }
+                catch {
+                    Add-Result -Area 'Fido' -Status 'Warn' -Message "Could not compare the pin with upstream Fido: $($_.Exception.Message)" -Action 'This says nothing about the pinned copy. It is checked again on the next run.'
+                }
             }
             else {
                 Add-Result -Area 'Fido' -Status 'Fail' -Message 'The published Fido no longer passes the script''s pre-execution checks (the reason is in the detail lines above).' -Action 'Read the failing check in Test-FidoScript. If Fido legitimately started using something on the $Banned list, that list needs revisiting. Do not relax the checks without reading the diff.'
@@ -713,35 +726,60 @@ try {
         }
     }
 
-    # --- Hotpatch month detection ---
+    # --- Hotpatch baseline detection ---
 
-    Write-Section 'Hotpatch month detection'
+    Write-Section 'Hotpatch baseline detection'
 
-    $HotpatchFn = Get-ScriptFunctionText -Name 'Test-IsHotpatchMonth'
+    $HotpatchFn = Get-ScriptFunctionText -Name 'Test-IsHotpatchBaseline'
     if (-not $HotpatchFn) {
-        Add-Result -Area 'Hotpatch' -Status 'Fail' -Message 'Test-IsHotpatchMonth was not found in the script.' -Action 'The function was renamed or removed. Update this tester.'
+        Add-Result -Area 'Hotpatch' -Status 'Fail' -Message 'Test-IsHotpatchBaseline was not found in the script.' -Action 'The function was renamed or removed. Update this tester.'
     }
     else {
         try {
             . ([scriptblock]::Create($HotpatchFn))
-            $Today = [datetime]::Today
-            $PriorMonth = $Today.AddMonths(-1)
-            $HotpatchEntry = [pscustomobject]@{ Title = 'Hotpatch Update for Windows 11'; LastUpdated = $Today.ToString('M/d/yyyy') }
-            $PriorEntry    = [pscustomobject]@{ Title = 'Hotpatch Update for Windows 11'; LastUpdated = $PriorMonth.ToString('M/d/yyyy') }
-            $NullEntry     = [pscustomobject]@{ Title = 'Regular Update'; LastUpdated = $null }
-            if (-not (Test-IsHotpatchMonth -AllResults @($HotpatchEntry) -ReferenceDate $Today)) {
-                Add-Result -Area 'Hotpatch' -Status 'Fail' -Message 'Test-IsHotpatchMonth returned false for a hotpatch entry in the current month.' -Action 'The date comparison or title regex changed. Read the function and fix it.'
+            $NovemberDate = [datetime]'2026-11-10'
+            $BaselineEntry  = [pscustomobject]@{ Title = '2026-10 Cumulative Update for Windows 11'; LastUpdated = $NovemberDate }
+            $InQuarterEntry = [pscustomobject]@{ Title = '2026-11 Cumulative Update for Windows 11'; LastUpdated = $NovemberDate }
+            $NoMonthEntry   = [pscustomobject]@{ Title = 'Cumulative Update for Windows 11'; LastUpdated = [datetime]'2026-04-14' }
+            $NullEntry      = [pscustomobject]@{ Title = 'Regular Update'; LastUpdated = $null }
+            if (-not (Test-IsHotpatchBaseline -Entry $BaselineEntry)) {
+                Add-Result -Area 'Hotpatch' -Status 'Fail' -Message 'Test-IsHotpatchBaseline returned false for an October update re-released in November.' -Action 'The title month must win over LastUpdated. Read the function and fix it.'
             }
-            elseif (Test-IsHotpatchMonth -AllResults @($PriorEntry) -ReferenceDate $Today) {
-                Add-Result -Area 'Hotpatch' -Status 'Fail' -Message 'Test-IsHotpatchMonth returned true for a prior-month hotpatch entry.' -Action 'The date comparison in Test-IsHotpatchMonth changed. Read the function and fix it.'
+            elseif (Test-IsHotpatchBaseline -Entry $InQuarterEntry) {
+                Add-Result -Area 'Hotpatch' -Status 'Fail' -Message 'Test-IsHotpatchBaseline returned true for a November update.' -Action 'The baseline month list changed. Read the function and fix it.'
+            }
+            elseif (-not (Test-IsHotpatchBaseline -Entry $NoMonthEntry)) {
+                Add-Result -Area 'Hotpatch' -Status 'Fail' -Message 'Test-IsHotpatchBaseline did not fall back to LastUpdated for a title without a month.' -Action 'Read the function and fix the fallback.'
+            }
+            elseif (Test-IsHotpatchBaseline -Entry $NullEntry) {
+                Add-Result -Area 'Hotpatch' -Status 'Fail' -Message 'Test-IsHotpatchBaseline returned true for an entry with no month at all.' -Action 'Read the function and fix it.'
             }
             else {
-                Test-IsHotpatchMonth -AllResults @($NullEntry) -ReferenceDate $Today | Out-Null
-                Add-Result -Area 'Hotpatch' -Status 'Pass' -Message 'Test-IsHotpatchMonth correctly identifies hotpatch months and handles null LastUpdated.'
+                Add-Result -Area 'Hotpatch' -Status 'Pass' -Message 'Test-IsHotpatchBaseline correctly identifies baseline months and handles null LastUpdated.'
             }
         }
         catch {
-            Add-Result -Area 'Hotpatch' -Status 'Fail' -Message "Test-IsHotpatchMonth threw unexpectedly: $($_.Exception.Message)" -Action 'The function signature changed. Read the function and update this test.'
+            Add-Result -Area 'Hotpatch' -Status 'Fail' -Message "Test-IsHotpatchBaseline threw unexpectedly: $($_.Exception.Message)" -Action 'The function signature changed. Read the function and update this test.'
+        }
+    }
+
+    # --- Hotpatch calendar ---
+
+    Write-Section 'Hotpatch calendar (Microsoft support page)'
+
+    # Without this page -BaselineOnly falls back to a guess, so a redesign has to be noticed here first.
+    $CalendarBaseline = Get-HotpatchBaselineKb
+    if (-not $CalendarBaseline) {
+        Add-Result -Area 'Hotpatch' -Status 'Fail' -Message 'The latest baseline could not be read from the hotpatch calendar (the reason is in the detail lines above).' -Action 'If the page moved or its table changed, update Get-HotpatchBaselineKb and ConvertFrom-HotpatchCalendar. Until then -BaselineOnly falls back to the planned months.'
+    }
+    else {
+        $BaselineTitle = "(?i)\bKB$($CalendarBaseline.Kb)\b"
+        $BaselineRows = @(Search-UpdateCatalog -Query "Cumulative Update for Windows 11 Version 25H2 for x64-based Systems KB$($CalendarBaseline.Kb)" | Where-Object { $_.Title -match $BaselineTitle })
+        if ($BaselineRows.Count -eq 0) {
+            Add-Result -Area 'Hotpatch' -Status 'Warn' -Message "The calendar names KB$($CalendarBaseline.Kb), but the catalog has no 25H2 x64 package for it." -Action 'Check whether the catalog search wording changed or the package is still being published.'
+        }
+        else {
+            Add-Result -Area 'Hotpatch' -Status 'Pass' -Message "The calendar names KB$($CalendarBaseline.Kb) ($($CalendarBaseline.Release)), and the catalog has it: $($BaselineRows[0].Title)"
         }
     }
 

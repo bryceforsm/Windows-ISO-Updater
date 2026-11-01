@@ -1,0 +1,10 @@
+{
+  "_comment": "Run with: .\\Run-Windows-ISO-Updater.bat -ConfigPath .\\Examples\\profile-win11-monthly.json",
+  "IsoPath": "D:\\ISOs\\Win11_25H2_original.iso",
+  "WorkPath": "D:\\WISO\\Win11",
+  "OutputIsoPath": "D:\\ISOs\\patched",
+  "KeepEditions": ["Windows 11 Enterprise", "Windows 11 Pro"],
+  "IsoNamePrefix": "Company-",
+  "AutoClean": true,
+  "KeepIsoCount": 3
+}

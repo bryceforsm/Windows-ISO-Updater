@@ -48,7 +48,7 @@ It leans on the community [Fido](https://github.com/pbatard/Fido) helper, which 
 
 The block is usually per-IP and temporary, so `-UseFido` retries a few times with a growing delay (`-FidoRetryCount`, two extra attempts by default), and the script can then offer Microsoft's Media Creation Tool because MCT talks to different servers and often still works. Both are workarounds for a problem you can avoid outright, and neither is something to build a monthly routine on.
 
-Making the download opt-in also keeps third-party code out of a default run. Fido is not signed, so the script has to verify its source, size, contents and behaviour before executing it (see [Important Notes](../README.md#important-notes)). None of that happens unless you ask for it.
+Making the download opt-in also keeps third-party code out of a default run. Fido is not signed, so the script pins one commit by SHA-256 and also checks its source, size, contents and behaviour before executing it. None of that happens unless you ask for it.
 
 **Download the ISO once, keep it, and point every build at it.** Get it from [microsoft.com/software-download](https://www.microsoft.com/software-download), the Media Creation Tool, the Microsoft Evaluation Center, your Volume Licensing Service Center or a Visual Studio subscription:
 
@@ -216,7 +216,7 @@ None of those came out of a prompt. They came out of having been bitten before, 
 
 ## Offline Servicing and Hot-Patch Eligibility
 
-Windows 11 25H2 Enterprise supports hot-patching through Intune or Azure Arc on a quarterly cadence. Months 1 and 4 of each quarter require a full cumulative update baseline. Months 2 and 3 receive lightweight in-memory hot patches that do not rewrite image files on disk.
+Windows 11 25H2 Enterprise supports hot-patching through Intune or Azure Arc on a quarterly cadence. January, April, July and October are planned as full cumulative update baselines, and Microsoft adds extra ones when a security issue calls for it, as it did in June and September 2026. The other months receive lightweight in-memory hot patches that do not rewrite image files on disk.
 
 Hotpatch updates cannot be applied offline via DISM at all. A regular cumulative update replaces binaries on disk, which is exactly what DISM's offline package injection does. A hotpatch instead modifies already-loaded code in the running kernel's address space and has no files to swap into a WIM image, so there is nothing for DISM to inject. The intended workflow is to offline-service the ISO with the baseline CU using `-BaselineOnly`, deploy the image, enroll the device in Intune or Azure Arc hotpatch policy, and let Windows Update deliver the in-quarter hotpatches to the live system at runtime.
 
@@ -226,10 +226,12 @@ If the integrated LCU is a non-baseline (in-quarter) update, the resulting image
 
 For environments where hot-patch eligibility is a hard requirement, two postures are reliable:
 
-- **Service against a known baseline CU.** Only run this tool after a baseline month's cumulative update has published (months 1 and 4 of each quarter). The resulting image starts at baseline level and is eligible for hot patches in the months that follow.
+- **Service against a known baseline CU.** Build against the latest baseline on [Microsoft's hotpatch calendar](https://support.microsoft.com/en-us/servicing/os/hotpatch/windows-11/2025/release-notes-for-hotpatch-on-windows-11-enterprise-version-25h2). The resulting image starts at baseline level and is eligible for hot patches in the months that follow.
 - **Deploy a lightly-patched image and patch online first.** Build the ISO against any available LCU, deploy the machine, and let Windows Update apply the current LCU through the normal online stack before enrolling the device in Intune hot-patch policy. This guarantees that CBS state is established the way Microsoft's hot-patch stack expects.
 
-The script also provides a `-BaselineOnly` switch for automating the first posture. When set, it checks the Update Catalog for a co-published "Hotpatch" title and, if one is found, skips the cumulative update step so the image stays on the prior baseline CU and remains hotpatch-eligible after deployment.
+The script also provides a `-BaselineOnly` switch for automating the first posture. When set, it reads the latest baseline KB from Microsoft's hotpatch calendar and fetches that package from the Update Catalog, so a build in November still gets October's baseline, whatever patch level the source ISO started from. The calendar has to decide because the catalog cannot: baselines carry ordinary cumulative update titles, and hotpatch packages do not appear in its search results. A later out-of-band update is passed over too, because it is not the baseline.
+
+If the calendar cannot be read, is out of date, or names a KB the catalog does not have for this release, the run warns and falls back to the newest security update from January, April, July or October. That can miss a baseline Microsoft added outside those months. If there is no such update either, the image keeps the source ISO's patch level.
 
 This is a known tradeoff in offline servicing, not a defect in this tool.
 
