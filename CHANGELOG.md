@@ -4,6 +4,8 @@ What changed in each release. Versions are dates, `yyyy.MM.dd.<revision>`. Relea
 
 ## [Unreleased]
 
+## [2026.10.31.5] - 2026-10-31
+
 ### Added
 
 - `-ConfigPath` loads build settings from a JSON profile, so a build can be repeated without a long command line. See [Using a JSON Profile](docs/usage.md#using-a-json-profile).
