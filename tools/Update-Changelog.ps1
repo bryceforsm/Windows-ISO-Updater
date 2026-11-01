@@ -9,7 +9,8 @@
 
 .EXAMPLE
     .\tools\Update-Changelog.ps1
-    Turns "## [Unreleased]" into "## [2026.10.31.5] - 2026-10-31" and adds a new empty Unreleased section.
+    Turns "## [Unreleased]" into a heading that links to the release, "## [2026.10.31.5](<url>) - 2026-10-31",
+    and adds a new empty Unreleased section.
 
 .EXAMPLE
     .\tools\Update-Changelog.ps1 -WriteNotesTo notes.md
@@ -66,7 +67,8 @@ if (-not $Unreleased.Success) { throw 'CHANGELOG.md has no "## [Unreleased]" sec
 $Entries = @($Unreleased.Groups['body'].Value -split "`n" | Where-Object { $_.Trim() -and $_ -notmatch '^#{3,}\s' })
 if ($Entries.Count -eq 0) { throw 'The Unreleased section of CHANGELOG.md is empty, so there is nothing to release.' }
 
-$Released = "## [Unreleased]`n`n## [$Version] - $(Get-Date -Format 'yyyy-MM-dd')`n$($Unreleased.Groups['body'].Value)"
+$ReleaseUrl = "https://github.com/bryceforsm/Windows-ISO-Updater/releases/tag/$Version"
+$Released = "## [Unreleased]`n`n## [$Version]($ReleaseUrl) - $(Get-Date -Format 'yyyy-MM-dd')`n$($Unreleased.Groups['body'].Value)"
 $Updated = $Text.Substring(0, $Unreleased.Index) + $Released + $Text.Substring($Unreleased.Index + $Unreleased.Length)
 [System.IO.File]::WriteAllText($ChangelogFile, ($Updated -replace "`n", $NewLine), (New-Object System.Text.UTF8Encoding($false)))
 Write-Host "CHANGELOG.md is ready for $Version. Commit only this file in a pull request, merge it, then run the Release workflow."
