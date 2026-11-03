@@ -10,7 +10,7 @@ What changed in each release. Versions are dates, `yyyy.MM.dd.<revision>`. Relea
 - With `-KeepAllEditions`, the run now lists the editions it is keeping, with their index numbers.
 - DISM's log for each failed package is now saved in a `_DISM` folder beside the run's logs, so the `Logs` folder holds everything a bug report needs.
 
-- The checksum file attached to each release is now `SHA256SUMS.txt`, so Windows opens it without asking which app to use. `2026.10.31.5` keeps its `SHA256SUMS` file.
+- The checksum file attached to each release is now `Windows-ISO-Updater.SHA256SUMS.txt`. Windows opens it without asking which app to use, and the release page lists it after the two files it checks. `2026.10.31.5` keeps its `SHA256SUMS` file.
 
 ### Fixed
 

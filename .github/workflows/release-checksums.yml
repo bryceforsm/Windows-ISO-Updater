@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing release tag to add SHA256SUMS.txt to'
+        description: 'Existing release tag to add Windows-ISO-Updater.SHA256SUMS.txt to'
         required: true
 
 permissions:
@@ -22,7 +22,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Attach SHA256SUMS.txt
+      # The release page lists assets by name, ignoring case, so this name keeps the checksums below the two files.
+      - name: Attach Windows-ISO-Updater.SHA256SUMS.txt
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -31,6 +32,6 @@ jobs:
           mkdir assets
           cd assets
           gh release download "$RELEASE_TAG" --pattern '*.ps1' --pattern '*.bat'
-          sha256sum -- * > SHA256SUMS.txt
-          cat SHA256SUMS.txt
-          gh release upload "$RELEASE_TAG" SHA256SUMS.txt --clobber
+          sha256sum -- * > Windows-ISO-Updater.SHA256SUMS.txt
+          cat Windows-ISO-Updater.SHA256SUMS.txt
+          gh release upload "$RELEASE_TAG" Windows-ISO-Updater.SHA256SUMS.txt --clobber
