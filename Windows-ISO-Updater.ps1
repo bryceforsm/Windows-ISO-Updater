@@ -1,6 +1,6 @@
 # GENERATED FILE. Edit the files in src\ and run tools\Build-Script.ps1, because changes made here are overwritten.
 # Windows ISO Updater
-# Version: 2026.11.02.4   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
+# Version: 2026.11.02.5   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
 #
 #region Script overview
 # This script builds a fully up-to-date ("slipstreamed") Windows 11, Windows 10 or Windows Server
@@ -311,7 +311,7 @@ $script:ScriptPath = $PSCommandPath
 
 # Kept in step with the header comment by tools\Update-Version.ps1, and shown in the log and recorded in
 # the build stamp so a finished ISO can be traced back to the exact script that built it.
-$ScriptVersion = '2026.11.02.4'
+$ScriptVersion = '2026.11.02.5'
 
 # A scheduled run has nobody to answer a prompt.
 if ($Scheduled) {
@@ -5960,7 +5960,8 @@ elseif ($KeepEditions -and $KeepEditions.Count -gt 0) {
     }
 }
 elseif ($KeepAllEditions) {
-    Write-HostTimestamp "Keeping all $($InstallImages.Count) editions (-KeepAllEditions)." -ForegroundColor Cyan
+    Write-HostTimestamp "Keeping all $($InstallImages.Count) editions (-KeepAllEditions):" -ForegroundColor Cyan
+    $InstallImages | ForEach-Object { Write-HostLog "    [$($_.ImageIndex)] $($_.ImageName)" }
     Write-Host $LineBreak
 }
 elseif ($InstallImages.Count -gt 1) {

@@ -42,7 +42,8 @@ elseif ($KeepEditions -and $KeepEditions.Count -gt 0) {
     }
 }
 elseif ($KeepAllEditions) {
-    Write-HostTimestamp "Keeping all $($InstallImages.Count) editions (-KeepAllEditions)." -ForegroundColor Cyan
+    Write-HostTimestamp "Keeping all $($InstallImages.Count) editions (-KeepAllEditions):" -ForegroundColor Cyan
+    $InstallImages | ForEach-Object { Write-HostLog "    [$($_.ImageIndex)] $($_.ImageName)" }
     Write-Host $LineBreak
 }
 elseif ($InstallImages.Count -gt 1) {
