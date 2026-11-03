@@ -15,6 +15,12 @@ start other workflows, which is why `release.yml` writes `Windows-ISO-Updater.SH
 regardless of upload order, which is what that name is for: it sorts after `Windows-ISO-Updater.ps1`, so the
 checksums are always the last of the three files.
 
+Each change is tested once, on its pull request. `tests.yml` does not run on pushes to main, because the
+ruleset means everything there arrived through a pull request that already passed, and a new push to a pull
+request cancels the run still going for the previous one. `dependency-check.yml` runs daily and on pull
+requests, not on every branch push. `release.yml` runs the tests again before it publishes, as the final check.
+Do not add push triggers back to these without a reason the pull request run does not cover.
+
 ## Security
 
 - Pin every third-party action to a full 40-character commit SHA with the version as a trailing

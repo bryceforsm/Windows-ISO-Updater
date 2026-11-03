@@ -20,7 +20,11 @@ on:
         description: 'Also download the MCT and ADK installers and verify their signatures'
         type: boolean
         default: false
-  push:
+  # What it checks lives outside this repository, so the daily run is the main check. A pull request runs it
+  # too, in case the change alters how the script asks those services, but a push to a branch does not.
+  pull_request:
+    branches:
+      - main
     paths:
       - 'Windows-ISO-Updater.ps1'
       - 'src/**'

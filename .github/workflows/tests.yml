@@ -1,15 +1,9 @@
 name: Tests
 
+# Pull requests only. The ruleset lets changes reach main through a pull request and nothing else, so a run on
+# the merge would repeat the one the pull request already passed. release.yml runs the tests again before
+# publishing anything.
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'Windows-ISO-Updater.ps1'
-      - 'src/**'
-      - 'tests/**'
-      - 'tools/**'
-      - '.github/workflows/tests.yml'
   pull_request:
     branches:
       - main
@@ -23,6 +17,11 @@ on:
 
 permissions:
   contents: read
+
+# A new push to a pull request makes the run still going for the previous one pointless, so that run stops.
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
