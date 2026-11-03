@@ -210,8 +210,17 @@ if (-not $SkipTattoo) {
     Write-HostTimestamp '  Open \WISO-Build on the ISO for the record of how it was built.' -ForegroundColor DarkGray
 }
 Write-Host ''
-if ($script:ServicingFailures -gt 0) {
-    Write-HostTimestamp "Note: the cumulative update didn't apply to $($script:ServicingFailures) edition(s), so they kept their original patch level. The ISO is still valid and bootable - see C:\Windows\Logs\DISM\dism.log if you want the details." -ForegroundColor DarkYellow
+# Every package that failed on any image, boot.wim and the recovery image included, so the warnings that scrolled
+# past during servicing are not the only place a failure shows.
+$FailedServicing = @($script:TattooServicing | Where-Object { $_.Result -eq 'Failed' })
+if ($FailedServicing.Count -gt 0 -or $script:ServicingFailures -gt 0) {
+    Write-HostTimestamp "Some updates didn't apply. The ISO is still valid and bootable, but these images are missing them:" -ForegroundColor Yellow
+    foreach ($Failure in $FailedServicing) {
+        Write-HostLog "  - $($Failure.Package) on $($Failure.Image)$(if ($Failure.Detail) { ": $($Failure.Detail)" })" -ForegroundColor Yellow
+    }
+    $DismLogFolder = Join-Path -Path $LogDir -ChildPath "Windows-ISO-Updater_${LogStamp}_DISM"
+    if (Test-Path -LiteralPath $DismLogFolder) { Write-HostTimestamp "  DISM's log for each one is in $DismLogFolder" -ForegroundColor DarkYellow }
+    else { Write-HostTimestamp '  Details are in C:\Windows\Logs\DISM\dism.log.' -ForegroundColor DarkYellow }
     Write-Host ''
 }
 Write-HostLog 'You can write it to a USB drive (e.g. with Rufus) or use it for a clean install or in-place upgrade.'

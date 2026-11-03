@@ -1,6 +1,6 @@
 # GENERATED FILE. Edit the files in src\ and run tools\Build-Script.ps1, because changes made here are overwritten.
 # Windows ISO Updater
-# Version: 2026.11.02.3   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
+# Version: 2026.11.02.4   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
 #
 #region Script overview
 # This script builds a fully up-to-date ("slipstreamed") Windows 11, Windows 10 or Windows Server
@@ -311,7 +311,7 @@ $script:ScriptPath = $PSCommandPath
 
 # Kept in step with the header comment by tools\Update-Version.ps1, and shown in the log and recorded in
 # the build stamp so a finished ISO can be traced back to the exact script that built it.
-$ScriptVersion = '2026.11.02.3'
+$ScriptVersion = '2026.11.02.4'
 
 # A scheduled run has nobody to answer a prompt.
 if ($Scheduled) {
@@ -598,6 +598,11 @@ foreach ($LogPattern in 'Windows-ISO-Updater_*.log', 'Windows-ISO-Updater_*_cons
         Select-Object -Skip 30 |
         Remove-Item -Force -ErrorAction SilentlyContinue
 }
+# A run only has a DISM folder when a package failed, holding that package's DISM log.
+Get-ChildItem -Path $LogDir -Filter 'Windows-ISO-Updater_*_DISM' -Directory -ErrorAction SilentlyContinue |
+    Sort-Object -Property LastWriteTime -Descending |
+    Select-Object -Skip 30 |
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
 $ProgressPreference = 'SilentlyContinue'
 $LineBreakCharacter = '-'
@@ -3501,10 +3506,12 @@ function Add-ServicingStack {
     param(
         [Parameter(Mandatory)][string]$MountDir,
         [Parameter(Mandatory)][string]$PackagePath,
-        [Parameter(Mandatory)][string]$StageDir
+        [Parameter(Mandatory)][string]$StageDir,
+        [string]$LogPath
     )
 
     $SsuDir = Join-Path -Path $StageDir -ChildPath 'ssu'
+    $LogArgs = @(if ($LogPath) { "/LogPath:$LogPath" })
     try {
         New-Item -ItemType Directory -Path $SsuDir -Force -ErrorAction Stop | Out-Null
 
@@ -3525,7 +3532,7 @@ function Add-ServicingStack {
         }
 
         Write-HostTimestamp "      Applying the bundled servicing stack update first: $($Ssu.Name)" -ForegroundColor DarkYellow
-        & dism.exe "/Image:$MountDir" '/Add-Package' "/PackagePath:$($Ssu.FullName)" | Out-Null
+        & dism.exe "/Image:$MountDir" '/Add-Package' "/PackagePath:$($Ssu.FullName)" @LogArgs | Out-Null
         if ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq 3010) {
             Write-HostTimestamp '      Servicing stack updated.' -ForegroundColor Green
             return $true
@@ -3571,6 +3578,91 @@ function Add-ServicingResult {
     $script:TattooServicing.Add($Record)
 }
 
+# The code DISM reported, as 0x followed by eight hex digits. Its own "Error: 0x..." line is preferred, because
+# the exit code is sometimes a generic one, and the exit code is the fallback.
+function Get-DismErrorCode {
+    param(
+        [object[]]$Output,
+        [int]$ExitCode
+    )
+    $Found = @([regex]::Matches((@($Output) -join "`n"), '(?i)\bError:\s*0x([0-9a-f]{8})'))
+    if ($Found.Count -gt 0) { return '0x' + $Found[$Found.Count - 1].Groups[1].Value.ToUpperInvariant() }
+    if ($ExitCode) { return '0x{0:X8}' -f $ExitCode }
+    return $null
+}
+
+# Plain words for the codes that turn up most when adding updates to an offline image. Anything else gets
+# DISM's own message and log lines, which are printed either way.
+function Get-DismErrorMeaning {
+    param([string]$Code)
+    switch ("$Code".ToUpperInvariant()) {
+        '0X800F081E' { 'the package does not apply to this image, usually because it is for a different release, edition or architecture'; break }
+        '0X800F0823' { 'the image needs a newer servicing stack before it can take this update'; break }
+        '0X800F0922' { 'the package failed partway through installing, most often because the servicing stack is too old or the package is for a different release'; break }
+        '0X800F0984' { 'a file this update patches is missing from the image, usually because the media was repacked or an earlier checkpoint update is missing'; break }
+        '0X800F0831' { 'the image is missing an earlier update this one builds on'; break }
+        '0X80070228' { "the image's files do not match their manifests, which usually means a repacked or UUP-built ISO rather than an official one"; break }
+        '0X80073712' { "the image's component store is damaged"; break }
+        '0X80070070' { 'there is not enough free disk space on the working drive'; break }
+        '0X80070005' { 'access was denied, often because antivirus or another program is holding files in the mounted image'; break }
+        '0X80070020' { 'another program has a file in the mounted image open, often antivirus, Explorer or the search indexer'; break }
+        '0X8007000D' { 'the package file is damaged, so delete it from the download folder and run again to fetch a fresh copy'; break }
+        '0X80070002' { 'DISM could not find a file it needed, such as the package itself or a checkpoint update staged with it'; break }
+        default { $null }
+    }
+}
+
+# DISM's console output without its banner, progress bars and blank lines, which leaves its own account of what
+# went wrong. The line that explains the failure often carries neither "error" nor a code, so nothing else is cut.
+function Get-DismMessage {
+    param([object[]]$Output)
+    return @(@($Output) | ForEach-Object { "$_".Trim() } | Where-Object {
+            $_ -and $_ -notmatch '^\[' -and
+            $_ -notmatch '^(Deployment Image Servicing and Management tool|Version:|Image Version:|The DISM log file can be found)'
+        } | Select-Object -Unique | Select-Object -Last 15)
+}
+
+# The Error lines from a DISM log, without the timestamp and padding that make them too wide to read on screen.
+function Get-DismLogError {
+    param(
+        [string]$Path,
+        [int]$Last = 10
+    )
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return @() }
+    $Lines = @(Get-Content -LiteralPath $Path -ErrorAction SilentlyContinue | Where-Object { $_ -match '^\S+ \S+, Error\s' })
+    return @($Lines | ForEach-Object {
+            $Text = ($_ -replace '^\S+ \S+, Error\s+', '') -replace '\s{2,}', ' '
+            if ($Text.Length -gt 240) { $Text.Substring(0, 237) + '...' } else { $Text }
+        } | Select-Object -Unique | Select-Object -Last $Last)
+}
+
+# Keeps the DISM log of a package that failed beside this run's own logs, named for the package and the image, so
+# one Logs folder holds everything a bug report needs. Logs of packages that applied are not kept, because a
+# cumulative update's can run to tens of megabytes. Returns the saved path, or $null.
+function Save-DismLog {
+    param(
+        [string]$Path,
+        [string]$Package,
+        [string]$ImageLabel
+    )
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+    try {
+        $Folder = Join-Path -Path $LogDir -ChildPath "Windows-ISO-Updater_${LogStamp}_DISM"
+        New-Item -ItemType Directory -Path $Folder -Force -ErrorAction Stop | Out-Null
+        # The KB alone, because the full file name carries a 40-character hash that would push the image off the end.
+        if ($Package -match '(?i)kb(\d{6,})') { $Package = "KB$($Matches[1])" }
+        $Name = (("$Package $ImageLabel".Trim() -replace '[^A-Za-z0-9.()-]+', '_') -replace '_+', '_').Trim('_')
+        if (-not $Name) { $Name = 'package' }
+        if ($Name.Length -gt 100) { $Name = $Name.Substring(0, 100) }
+        $Destination = Join-Path -Path $Folder -ChildPath "$Name.log"
+        $Count = 1
+        while (Test-Path -LiteralPath $Destination) { $Count++; $Destination = Join-Path -Path $Folder -ChildPath "${Name}_$Count.log" }
+        Copy-Item -LiteralPath $Path -Destination $Destination -ErrorAction Stop
+        return $Destination
+    }
+    catch { return $null }
+}
+
 function Add-UpdateGroup {
     param(
         [Parameter(Mandatory)][string]$MountDir,
@@ -3604,6 +3696,10 @@ function Add-UpdateGroup {
             $Target = $Dest  # the group is ordered target-last, so the final file copied is the target
         }
 
+        # A log of just this package, rather than the shared C:\Windows\Logs\DISM\dism.log every DISM call on the
+        # machine appends to. Kept with the run's logs only if the package fails.
+        $DismLog = Join-Path -Path $Stage -ChildPath 'dism.log'
+
         $Extra = if ($Group.Count -gt 1) { " (+$($Group.Count - 1) prior checkpoint file(s) staged alongside)" } else { '' }
         Write-HostTimestamp "      Applying ${Label}: $(Split-Path -Leaf $Target)$Extra"
         Write-HostTimestamp '      Running DISM /Add-Package with the target as the sole package (this can take several minutes)...'
@@ -3612,7 +3708,7 @@ function Add-UpdateGroup {
         # servicing stack, a momentary I/O hiccup) often clear on a second attempt.
         $MaxAttempts = 2
         for ($Attempt = 1; $Attempt -le $MaxAttempts; $Attempt++) {
-            $Output = & dism.exe "/Image:$MountDir" '/Add-Package' "/PackagePath:$Target" 2>&1
+            $Output = & dism.exe "/Image:$MountDir" '/Add-Package' "/PackagePath:$Target" "/LogPath:$DismLog" 2>&1
             $ExitCode = $LASTEXITCODE
 
             if ($ExitCode -eq 0 -or $ExitCode -eq 3010) {
@@ -3634,9 +3730,9 @@ function Add-UpdateGroup {
 
         # 0x800F0823 is CBS_E_NEW_SERVICING_STACK_REQUIRED, so retrying the same package can never work
         # until the image's servicing stack is brought forward.
-        if (($Output -match '0x800f0823') -and (Add-ServicingStack -MountDir $MountDir -PackagePath $Target -StageDir $Stage)) {
+        if (($Output -match '0x800f0823') -and (Add-ServicingStack -MountDir $MountDir -PackagePath $Target -StageDir $Stage -LogPath $DismLog)) {
             Write-HostTimestamp '      Retrying the update now the servicing stack is current...' -ForegroundColor DarkYellow
-            $Output = & dism.exe "/Image:$MountDir" '/Add-Package' "/PackagePath:$Target" 2>&1
+            $Output = & dism.exe "/Image:$MountDir" '/Add-Package' "/PackagePath:$Target" "/LogPath:$DismLog" 2>&1
             $ExitCode = $LASTEXITCODE
             if ($ExitCode -eq 0 -or $ExitCode -eq 3010) {
                 Write-HostTimestamp '      Applied.' -ForegroundColor Green
@@ -3645,11 +3741,25 @@ function Add-UpdateGroup {
             }
         }
 
-        Write-HostTimestamp "      This package didn't apply (DISM exit code $ExitCode). Details are in C:\Windows\Logs\DISM\dism.log." -ForegroundColor DarkYellow
-        Add-ServicingResult -Image $ImageLabel -Package (Split-Path -Leaf $Target) -Result 'Failed' -Detail "DISM /Add-Package returned exit code $ExitCode" -Checkpoints $Checkpoints
-        $Output | Where-Object { $_ -match '(?i)error|0x[0-9a-f]{8}' } | Select-Object -Last 8 | ForEach-Object {
-            Write-HostLog "        $_" -ForegroundColor DarkGray
+        $PackageName = Split-Path -Leaf $Target
+        $Code = Get-DismErrorCode -Output $Output -ExitCode $ExitCode
+        $Meaning = Get-DismErrorMeaning -Code $Code
+        Write-HostTimestamp "      This package didn't apply: DISM error $Code$(if ($Meaning) { " - $Meaning" })." -ForegroundColor Yellow
+        $Message = @(Get-DismMessage -Output $Output)
+        if ($Message.Count -gt 0) {
+            Write-HostTimestamp '      DISM said:' -ForegroundColor DarkYellow
+            foreach ($Line in $Message) { Write-HostLog "        $Line" -ForegroundColor DarkYellow }
         }
+        $LogErrors = @(Get-DismLogError -Path $DismLog)
+        if ($LogErrors.Count -gt 0) {
+            Write-HostTimestamp "      The errors DISM logged, last $($LogErrors.Count):" -ForegroundColor DarkYellow
+            foreach ($Line in $LogErrors) { Write-HostLog "        $Line" -ForegroundColor DarkGray }
+        }
+        $SavedLog = Save-DismLog -Path $DismLog -Package $PackageName -ImageLabel $ImageLabel
+        if ($SavedLog) { Write-HostTimestamp "      DISM's full log for this package: $SavedLog" -ForegroundColor DarkYellow }
+        else { Write-HostTimestamp '      Details are in C:\Windows\Logs\DISM\dism.log.' -ForegroundColor DarkYellow }
+        $Detail = "DISM error $Code$(if ($Meaning) { ": $Meaning" })"
+        Add-ServicingResult -Image $ImageLabel -Package $PackageName -Result 'Failed' -Detail $Detail -Checkpoints $Checkpoints
         # Both failures mention "Unattend.xml", which is a red herring, so the error code decides the advice.
         if ($Output -match '0x800f0823') {
             Write-HostTimestamp '      Tip: 0x800F0823 means the image needs a newer servicing stack than it has, and the one' -ForegroundColor DarkGray
@@ -6790,8 +6900,17 @@ if (-not $SkipTattoo) {
     Write-HostTimestamp '  Open \WISO-Build on the ISO for the record of how it was built.' -ForegroundColor DarkGray
 }
 Write-Host ''
-if ($script:ServicingFailures -gt 0) {
-    Write-HostTimestamp "Note: the cumulative update didn't apply to $($script:ServicingFailures) edition(s), so they kept their original patch level. The ISO is still valid and bootable - see C:\Windows\Logs\DISM\dism.log if you want the details." -ForegroundColor DarkYellow
+# Every package that failed on any image, boot.wim and the recovery image included, so the warnings that scrolled
+# past during servicing are not the only place a failure shows.
+$FailedServicing = @($script:TattooServicing | Where-Object { $_.Result -eq 'Failed' })
+if ($FailedServicing.Count -gt 0 -or $script:ServicingFailures -gt 0) {
+    Write-HostTimestamp "Some updates didn't apply. The ISO is still valid and bootable, but these images are missing them:" -ForegroundColor Yellow
+    foreach ($Failure in $FailedServicing) {
+        Write-HostLog "  - $($Failure.Package) on $($Failure.Image)$(if ($Failure.Detail) { ": $($Failure.Detail)" })" -ForegroundColor Yellow
+    }
+    $DismLogFolder = Join-Path -Path $LogDir -ChildPath "Windows-ISO-Updater_${LogStamp}_DISM"
+    if (Test-Path -LiteralPath $DismLogFolder) { Write-HostTimestamp "  DISM's log for each one is in $DismLogFolder" -ForegroundColor DarkYellow }
+    else { Write-HostTimestamp '  Details are in C:\Windows\Logs\DISM\dism.log.' -ForegroundColor DarkYellow }
     Write-Host ''
 }
 Write-HostLog 'You can write it to a USB drive (e.g. with Rufus) or use it for a clean install or in-place upgrade.'

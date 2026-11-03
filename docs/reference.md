@@ -190,12 +190,15 @@ The tradeoff is that files inside the offline image are not scanned while it is 
 
 ## Logging
 
-Each run writes two files to `<WorkPath>\Logs` (or `-LogPath`), both stamped with the date and time it started. The 30 most recent of each are kept and older ones are pruned automatically.
+Each run writes two files to `<WorkPath>\Logs` (or `-LogPath`), both stamped with the date and time it started, and a folder of DISM logs when an update fails. The 30 most recent of each are kept and older ones are pruned automatically.
 
 | File | What it is |
 | --- | --- |
 | `Windows-ISO-Updater_<date>_<time>.log` | The log to read, written in [CMTrace](https://learn.microsoft.com/en-us/mem/configmgr/core/support/cmtrace) format |
 | `Windows-ISO-Updater_<date>_<time>_console.txt` | The raw PowerShell transcript of the same run |
+| `Windows-ISO-Updater_<date>_<time>_DISM\` | Only when an update failed to apply: DISM's own log for each failed package, named after the update and the image, for example `KB5134130_install.wim_index_1_(Windows_11_Pro).log` |
+
+When an update fails, the run prints the DISM error code with what it usually means, DISM's own message, and the error lines from its log, then lists every failed package again at the end of the run. The `_DISM` folder means a bug report needs only the `Logs` folder, not `C:\Windows\Logs\DISM\dism.log`, which every DISM command on the computer writes to. Logs of packages that applied are not kept, because a cumulative update's can run to tens of megabytes.
 
 Open the `.log` in CMTrace or OneTrace and you get the usual columns. Severity comes from the colour the script already prints in, so anything red (or dark red) is logged as an error and anything yellow (or dark yellow) as a warning, which makes CMTrace's error and warning highlighting match what you would have seen on screen. The component column is the name of the step that was running, for example `Mounting the install image`, so filtering by component narrows a long build down to one phase. Each entry also records the line of the script that wrote it.
 

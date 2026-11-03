@@ -6,7 +6,7 @@ $script:ScriptPath = $PSCommandPath
 
 # Kept in step with the header comment by tools\Update-Version.ps1, and shown in the log and recorded in
 # the build stamp so a finished ISO can be traced back to the exact script that built it.
-$ScriptVersion = '2026.11.02.3'
+$ScriptVersion = '2026.11.02.4'
 
 # A scheduled run has nobody to answer a prompt.
 if ($Scheduled) {
@@ -293,6 +293,11 @@ foreach ($LogPattern in 'Windows-ISO-Updater_*.log', 'Windows-ISO-Updater_*_cons
         Select-Object -Skip 30 |
         Remove-Item -Force -ErrorAction SilentlyContinue
 }
+# A run only has a DISM folder when a package failed, holding that package's DISM log.
+Get-ChildItem -Path $LogDir -Filter 'Windows-ISO-Updater_*_DISM' -Directory -ErrorAction SilentlyContinue |
+    Sort-Object -Property LastWriteTime -Descending |
+    Select-Object -Skip 30 |
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
 $ProgressPreference = 'SilentlyContinue'
 $LineBreakCharacter = '-'
