@@ -6,7 +6,7 @@ $script:ScriptPath = $PSCommandPath
 
 # Kept in step with the header comment by tools\Update-Version.ps1, and shown in the log and recorded in
 # the build stamp so a finished ISO can be traced back to the exact script that built it.
-$ScriptVersion = '2026.11.02.2'
+$ScriptVersion = '2026.11.02.3'
 
 # A scheduled run has nobody to answer a prompt.
 if ($Scheduled) {
@@ -157,7 +157,9 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
 
         # Waiting hands the exit code back to the caller, which is how -CheckOnly reports its 0 or 10.
         try {
-            $Elevated = Start-Process -FilePath PowerShell.exe -Verb Runas -ArgumentList $ArgumentList -Wait -PassThru -ErrorAction Stop
+            # The same edition this run started in, so running from pwsh does not quietly switch to Windows PowerShell.
+            $PsExe = if ($PSVersionTable.PSEdition -eq 'Core') { Join-Path -Path $PSHOME -ChildPath 'pwsh.exe' } else { Join-Path -Path $PSHOME -ChildPath 'powershell.exe' }
+            $Elevated = Start-Process -FilePath $PsExe -Verb Runas -ArgumentList $ArgumentList -Wait -PassThru -ErrorAction Stop
             exit $Elevated.ExitCode
         }
         catch {

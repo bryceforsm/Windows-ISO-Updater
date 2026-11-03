@@ -85,7 +85,9 @@ Remove-Item -LiteralPath '$EscCleanupScript' -Force
 
     try {
         New-Item -ItemType Directory -Path $ToolsDir -Force -ErrorAction Stop | Out-Null
-        Set-Content -LiteralPath $CleanupScript -Value $Body -Encoding UTF8 -ErrorAction Stop
+        # Always Windows PowerShell runs it, and that reads a file without a byte-order mark as ANSI, so the mark
+        # is written explicitly. PowerShell 7's -Encoding UTF8 leaves it out, which would garble non-ASCII paths.
+        [System.IO.File]::WriteAllText($CleanupScript, $Body, (New-Object System.Text.UTF8Encoding $true))
         # SYSTEM runs this file, so nobody below Administrator may be able to rewrite it first.
         & icacls.exe "$CleanupScript" /inheritance:r /grant '*S-1-5-18:(F)' '*S-1-5-32-544:(F)' /Q 2>&1 | Out-Null
 

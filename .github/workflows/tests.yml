@@ -26,21 +26,32 @@ permissions:
 
 jobs:
   test:
+    # The script runs on both Windows PowerShell 5.1 and PowerShell 7, which differ in ways such as what
+    # ConvertFrom-Json hands back, so the tests run on each.
+    name: test (${{ matrix.shell }})
     runs-on: windows-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shell: powershell
+            exe: powershell.exe
+          - shell: pwsh
+            exe: pwsh.exe
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Windows PowerShell 5.1, the edition the script targets, rather than the runner's pwsh 7.
+      # Each edition has its own module folders, so the modules are installed for the one under test.
       # -SkipPublisherCheck because the Pester 3 that ships with Windows is signed by a different publisher.
       - name: Install test modules
-        shell: powershell
+        shell: ${{ matrix.shell }}
         run: |
           Install-Module -Name Pester -RequiredVersion 5.7.1 -Scope CurrentUser -SkipPublisherCheck -Force
           Install-Module -Name PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Force
 
       - name: Run PSScriptAnalyzer and Pester
-        shell: powershell
+        shell: ${{ matrix.shell }}
         run: |
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Invoke-Tests.ps1
+          ${{ matrix.exe }} -NoProfile -ExecutionPolicy Bypass -File .\tools\Invoke-Tests.ps1
           exit $LASTEXITCODE

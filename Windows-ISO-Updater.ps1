@@ -1,6 +1,6 @@
 # GENERATED FILE. Edit the files in src\ and run tools\Build-Script.ps1, because changes made here are overwritten.
 # Windows ISO Updater
-# Version: 2026.11.02.2   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
+# Version: 2026.11.02.3   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
 #
 #region Script overview
 # This script builds a fully up-to-date ("slipstreamed") Windows 11, Windows 10 or Windows Server
@@ -311,7 +311,7 @@ $script:ScriptPath = $PSCommandPath
 
 # Kept in step with the header comment by tools\Update-Version.ps1, and shown in the log and recorded in
 # the build stamp so a finished ISO can be traced back to the exact script that built it.
-$ScriptVersion = '2026.11.02.2'
+$ScriptVersion = '2026.11.02.3'
 
 # A scheduled run has nobody to answer a prompt.
 if ($Scheduled) {
@@ -462,7 +462,9 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
 
         # Waiting hands the exit code back to the caller, which is how -CheckOnly reports its 0 or 10.
         try {
-            $Elevated = Start-Process -FilePath PowerShell.exe -Verb Runas -ArgumentList $ArgumentList -Wait -PassThru -ErrorAction Stop
+            # The same edition this run started in, so running from pwsh does not quietly switch to Windows PowerShell.
+            $PsExe = if ($PSVersionTable.PSEdition -eq 'Core') { Join-Path -Path $PSHOME -ChildPath 'pwsh.exe' } else { Join-Path -Path $PSHOME -ChildPath 'powershell.exe' }
+            $Elevated = Start-Process -FilePath $PsExe -Verb Runas -ArgumentList $ArgumentList -Wait -PassThru -ErrorAction Stop
             exit $Elevated.ExitCode
         }
         catch {
@@ -2064,7 +2066,7 @@ function Get-BuildParameterHash {
 
 function Read-BuildStamp {
     if (-not (Test-Path -LiteralPath $StampFile -PathType Leaf)) { return $null }
-    try { return (Get-Content -LiteralPath $StampFile -Raw -ErrorAction Stop | ConvertFrom-Json) }
+    try { return (Get-Content -LiteralPath $StampFile -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json) }
     catch {
         Write-HostTimestamp "  The stamp '$StampFile' could not be read ($($_.Exception.Message)), so this is treated as a first run." -ForegroundColor Yellow
         return $null
@@ -2086,7 +2088,7 @@ function Get-PreviousBuildStamp {
 function Get-BuildStampHistory {
     $Stamps = New-Object System.Collections.Generic.List[object]
     foreach ($File in @(Get-ChildItem -LiteralPath $StampHistoryDir -Filter 'stamp_*.json' -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)) {
-        try { $Stamps.Add((Get-Content -LiteralPath $File.FullName -Raw -ErrorAction Stop | ConvertFrom-Json)) } catch { }
+        try { $Stamps.Add((Get-Content -LiteralPath $File.FullName -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json)) } catch { }
     }
     return $Stamps.ToArray()
 }
@@ -2174,10 +2176,28 @@ function Read-HashCache {
     try {
         # Windows PowerShell 5.1 emits a deserialised array as ONE pipeline item, so it has to be assigned
         # before @() can enumerate it. Wrapping the call itself yields an array holding a single array.
-        $Parsed = Get-Content -LiteralPath $HashCacheFile -Raw -ErrorAction Stop | ConvertFrom-Json
+        $Parsed = Get-Content -LiteralPath $HashCacheFile -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json
         return @($Parsed)
     }
     catch { return @() }   # an unreadable cache costs a re-hash, so it is rebuilt rather than reported
+}
+
+# True when a write time read back from a stamp or the hash cache is the file's current one. Windows PowerShell
+# hands the recorded value back as the round-trip string it was saved as, but PowerShell 7's ConvertFrom-Json
+# turns it into a DateTime, whose text form drops the fraction of a second, so comparing text never matches there.
+function Test-SameWriteTime {
+    param(
+        $Recorded,
+        [Parameter(Mandatory)][datetime]$Actual
+    )
+    if (-not $Recorded) { return $false }
+    if ($Recorded -isnot [datetime]) {
+        $Parsed = [datetime]::MinValue
+        if (-not [datetime]::TryParse("$Recorded", [System.Globalization.CultureInfo]::InvariantCulture,
+                [System.Globalization.DateTimeStyles]::RoundtripKind, [ref]$Parsed)) { return $false }
+        $Recorded = $Parsed
+    }
+    return ($Recorded.ToUniversalTime().Ticks -eq $Actual.ToUniversalTime().Ticks)
 }
 
 function Get-CachedSha256 {
@@ -2185,7 +2205,7 @@ function Get-CachedSha256 {
     foreach ($Entry in @(Read-HashCache)) {
         if ("$($Entry.Path)" -ieq $Item.FullName -and
             "$($Entry.Length)" -eq "$($Item.Length)" -and
-            "$($Entry.LastWriteTimeUtc)" -eq $Item.LastWriteTimeUtc.ToString('o')) {
+            (Test-SameWriteTime -Recorded $Entry.LastWriteTimeUtc -Actual $Item.LastWriteTimeUtc)) {
             return "$($Entry.Sha256)"
         }
     }
@@ -2231,7 +2251,7 @@ function Get-SourceIsoHash {
     if ($Stamp -and $Stamp.Source -and $Stamp.Source.Sha256 -and
         "$($Stamp.Source.Path)" -ieq $Item.FullName -and
         "$($Stamp.Source.Length)" -eq "$($Item.Length)" -and
-        "$($Stamp.Source.LastWriteTimeUtc)" -eq $Item.LastWriteTimeUtc.ToString('o')) {
+        (Test-SameWriteTime -Recorded $Stamp.Source.LastWriteTimeUtc -Actual $Item.LastWriteTimeUtc)) {
         Write-HostTimestamp '  The source ISO is untouched since the last run, so its recorded hash is reused.' -ForegroundColor DarkGray
         return "$($Stamp.Source.Sha256)"
     }
@@ -3241,7 +3261,9 @@ Remove-Item -LiteralPath '$EscCleanupScript' -Force
 
     try {
         New-Item -ItemType Directory -Path $ToolsDir -Force -ErrorAction Stop | Out-Null
-        Set-Content -LiteralPath $CleanupScript -Value $Body -Encoding UTF8 -ErrorAction Stop
+        # Always Windows PowerShell runs it, and that reads a file without a byte-order mark as ANSI, so the mark
+        # is written explicitly. PowerShell 7's -Encoding UTF8 leaves it out, which would garble non-ASCII paths.
+        [System.IO.File]::WriteAllText($CleanupScript, $Body, (New-Object System.Text.UTF8Encoding $true))
         # SYSTEM runs this file, so nobody below Administrator may be able to rewrite it first.
         & icacls.exe "$CleanupScript" /inheritance:r /grant '*S-1-5-18:(F)' '*S-1-5-32-544:(F)' /Q 2>&1 | Out-Null
 

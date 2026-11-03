@@ -7,7 +7,7 @@ BeforeAll {
         'ConvertFrom-HotpatchCalendar', 'Read-ConfigFile', 'Format-ShortHash', 'Get-BuildParameterHash', 'Get-DefaultIsoName', 'Get-EditionRank', 'Get-EditionShortName',
         'Get-FileDownload', 'Get-HotpatchBaselineKb', 'Get-PatchTuesdayStart', 'Get-ScheduledTaskArgumentString', 'Get-ScriptCommandLine', 'Get-TextSha256',
         'Resolve-EditionIndexes', 'Search-UpdateCatalog', 'Select-DefaultEditions', 'Select-HotpatchBaselineEntry', 'Test-FidoUrl', 'Test-IsHotpatchBaseline',
-        'Test-MicrosoftDownloadUrl', 'Test-RebuildNeeded', 'Test-UpdatePackageFile'
+        'Test-MicrosoftDownloadUrl', 'Test-RebuildNeeded', 'Test-SameWriteTime', 'Test-UpdatePackageFile'
     )
     foreach ($Name in $Names) {
         $Definition = $Ast.Find({
@@ -238,6 +238,35 @@ Describe 'Get-FileDownload' {
         Get-FileDownload -Url 'https://example.test/a' -Destination $script:Target | Should -BeFalse
         Test-Path -LiteralPath $script:Target | Should -BeFalse
         Test-Path -LiteralPath "$script:Target.partial" | Should -BeFalse
+    }
+}
+
+Describe 'Test-SameWriteTime' {
+    BeforeAll {
+        $script:WriteTime = [datetime]::new(2026, 10, 28, 17, 20, 29, [System.DateTimeKind]::Utc).AddTicks(801861)
+    }
+
+    It 'matches the time after a round trip through JSON' {
+        # Windows PowerShell gives the string back and PowerShell 7 a DateTime, and both have to match.
+        $Recorded = (@{ Time = $script:WriteTime.ToString('o') } | ConvertTo-Json | ConvertFrom-Json).Time
+        Test-SameWriteTime -Recorded $Recorded -Actual $script:WriteTime | Should -BeTrue
+    }
+
+    It 'matches the recorded string and a DateTime' {
+        Test-SameWriteTime -Recorded $script:WriteTime.ToString('o') -Actual $script:WriteTime | Should -BeTrue
+        Test-SameWriteTime -Recorded $script:WriteTime -Actual $script:WriteTime | Should -BeTrue
+    }
+
+    It 'does not match a different time, even by a fraction of a second' {
+        Test-SameWriteTime -Recorded $script:WriteTime.AddTicks(-801861).ToString('o') -Actual $script:WriteTime | Should -BeFalse
+    }
+
+    It 'does not match <Recorded>' -TestCases @(
+        @{ Recorded = $null }
+        @{ Recorded = '' }
+        @{ Recorded = 'not a time' }
+    ) {
+        Test-SameWriteTime -Recorded $Recorded -Actual $script:WriteTime | Should -BeFalse
     }
 }
 
