@@ -71,6 +71,20 @@ For search and easier navigation, read the documentation at [bryceforsm.github.i
 
 For any problem with this tool, please [submit a GitHub issue](https://github.com/bryceforsm/Windows-ISO-Updater/issues).
 
+**Attach the logs from the run.** They show what the tool found, chose and did at each step, so an issue that includes them can usually be fixed without a round of follow-up questions. They are in the `Logs` folder under the working folder (`<WorkPath>\Logs`, or `-LogPath` if you set it). Attach these files from the run that went wrong:
+
+* `Windows-ISO-Updater_<date>_<time>.log`, the main log
+* `Windows-ISO-Updater_<date>_<time>_console.txt`, everything that appeared on screen
+* The `Windows-ISO-Updater_<date>_<time>_DISM` folder, if there is one. It is only created when an update failed to apply.
+
+Please also include:
+
+* The command you ran, or the JSON profile if you used `-ConfigPath`
+* Whether you started it from Windows PowerShell, PowerShell 7 or the `.bat` file
+* Where the source ISO came from, for example the Microsoft website, the Evaluation Center or Visual Studio subscriptions
+
+The logs record the computer name and the full paths the run used, which often include your Windows user name. Look them over and replace anything you would rather not post before attaching them. See [Logging](docs/reference.md#logging) for what each file contains.
+
 ## License
 
 Distributed under the [MIT License](LICENSE). Third-party utilities and Microsoft updates fetched during runtime remain governed by their respective vendor terms.
