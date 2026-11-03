@@ -125,7 +125,10 @@ Write-HostLog "  Downloads        : $DlDir"
 if (-not $IsoPath) { Write-HostLog '                     (drop your own .iso here and it is used instead of downloading one)' -ForegroundColor DarkGray }
 Write-HostLog "  Logs             : $LogDir"
 if (-not $NoStamp) { Write-HostLog "  Build stamps     : $StampRoot" }
-$IsoNameBase = if ($script:EffectiveServer) { 'WinSrv2025_Std_x64_<build>.<UBR>_<date-time>' } else { 'Win11_EntPro_x64_<build>.<UBR>_<date-time>' }
+# Nothing has read the image yet, so only the parts settled before then are filled in. Only a client download
+# knows its release in advance; a local ISO or Server media is named after whatever the image turns out to be.
+$IsoNameRelease = if (-not $LocalIsoAvailable -and -not $script:EffectiveServer) { "Win$WindowsVersion" } else { '<release>' }
+$IsoNameBase = "$($IsoNameRelease)_<edition>_<arch>_<language>_<build>.<UBR>_<date-time>"
 $IsoNameExample = "$IsoNamePrefix$IsoNameBase$IsoNameSuffix.iso"
 Write-HostLog "  Finished ISO     : $(if ($OutputIsoPath) { $OutputIsoPath } else { Join-Path $FinishedIsoDir $IsoNameExample })"
 Write-Host ''

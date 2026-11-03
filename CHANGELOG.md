@@ -8,6 +8,10 @@ What changed in each release. Versions are dates, `yyyy.MM.dd.<revision>`. Relea
 
 - The checksum file attached to each release is now `SHA256SUMS.txt`, so Windows opens it without asking which app to use. `2026.10.31.5` keeps its `SHA256SUMS` file.
 
+### Fixed
+
+- The `Finished ISO` line printed at startup no longer claims the ISO will be named `Win11_EntPro_...` when the source is Windows Server or a release that has not been read yet. It now shows placeholders for the parts that come from the image, such as `<release>_<edition>_<arch>_...`. The finished ISO was always named correctly. ([#17](https://github.com/bryceforsm/Windows-ISO-Updater/issues/17))
+
 ## [2026.10.31.5](https://github.com/bryceforsm/Windows-ISO-Updater/releases/tag/2026.10.31.5) - 2026-10-31
 
 ### Added
