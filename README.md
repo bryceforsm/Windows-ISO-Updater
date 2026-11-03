@@ -85,6 +85,8 @@ Please also include:
 
 The logs record the computer name and the full paths the run used, which often include your Windows user name. Look them over and replace anything you would rather not post before attaching them. See [Logging](docs/reference.md#logging) for what each file contains.
 
+Issues and pull requests with no activity for 90 days are marked as stale and closed 14 days later. Any comment keeps one open.
+
 ## License
 
 Distributed under the [MIT License](LICENSE). Third-party utilities and Microsoft updates fetched during runtime remain governed by their respective vendor terms.
