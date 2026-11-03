@@ -40,7 +40,7 @@ Check that `main` holds everything you want to ship, its checks are passing, and
    gh workflow run release.yml --ref main
    ```
 
-5. **Check the [Releases page](https://github.com/bryceforsm/Windows-ISO-Updater/releases).** The new release should have the notes from the changelog and these three files: `Run-Windows-ISO-Updater.bat`, `Windows-ISO-Updater.ps1` and `SHA256SUMS.txt`.
+5. **Check the [Releases page](https://github.com/bryceforsm/Windows-ISO-Updater/releases).** The new release should have the notes from the changelog and these three files: `Run-Windows-ISO-Updater.bat`, `Windows-ISO-Updater.ps1` and `Windows-ISO-Updater.SHA256SUMS.txt`, in that order.
 
 ## If the workflow stops
 

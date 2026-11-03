@@ -6,7 +6,7 @@ $script:ScriptPath = $PSCommandPath
 
 # Kept in step with the header comment by tools\Update-Version.ps1, and shown in the log and recorded in
 # the build stamp so a finished ISO can be traced back to the exact script that built it.
-$ScriptVersion = '2026.10.31.5'
+$ScriptVersion = '2026.11.02.5'
 
 # A scheduled run has nobody to answer a prompt.
 if ($Scheduled) {
@@ -30,6 +30,15 @@ if ($PSVersionTable.PSVersion.Major -lt 5) {
     Write-Host "Please update your PowerShell version to proceed." -ForegroundColor Red
     Start-Sleep -Seconds 10
     exit 1
+}
+
+# Started from a PowerShell 7 terminal by way of cmd.exe (the .bat), Windows PowerShell inherits PowerShell 7's
+# module folders. pwsh only cleans them out for a powershell.exe it starts itself. Listed first, they make 5.1 try
+# PowerShell 7's own Microsoft.PowerShell.Utility and similar, which cannot load here, so commands such as
+# Get-FileHash vanish. Must come before the first command that is loaded on demand.
+if ($PSVersionTable.PSEdition -eq 'Desktop' -and $env:PSModulePath) {
+    $env:PSModulePath = (@($env:PSModulePath -split ';') |
+            Where-Object { $_ -and $_ -notmatch '(?i)\\PowerShell\\(\d+(\.\d+)*(-preview)?\\)?Modules\\?$' }) -join ';'
 }
 
 # Verify you are running on Windows 10 (or Windows Server 2016) or higher
@@ -148,7 +157,9 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
 
         # Waiting hands the exit code back to the caller, which is how -CheckOnly reports its 0 or 10.
         try {
-            $Elevated = Start-Process -FilePath PowerShell.exe -Verb Runas -ArgumentList $ArgumentList -Wait -PassThru -ErrorAction Stop
+            # The same edition this run started in, so running from pwsh does not quietly switch to Windows PowerShell.
+            $PsExe = if ($PSVersionTable.PSEdition -eq 'Core') { Join-Path -Path $PSHOME -ChildPath 'pwsh.exe' } else { Join-Path -Path $PSHOME -ChildPath 'powershell.exe' }
+            $Elevated = Start-Process -FilePath $PsExe -Verb Runas -ArgumentList $ArgumentList -Wait -PassThru -ErrorAction Stop
             exit $Elevated.ExitCode
         }
         catch {
@@ -282,6 +293,11 @@ foreach ($LogPattern in 'Windows-ISO-Updater_*.log', 'Windows-ISO-Updater_*_cons
         Select-Object -Skip 30 |
         Remove-Item -Force -ErrorAction SilentlyContinue
 }
+# A run only has a DISM folder when a package failed, holding that package's DISM log.
+Get-ChildItem -Path $LogDir -Filter 'Windows-ISO-Updater_*_DISM' -Directory -ErrorAction SilentlyContinue |
+    Sort-Object -Property LastWriteTime -Descending |
+    Select-Object -Skip 30 |
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
 $ProgressPreference = 'SilentlyContinue'
 $LineBreakCharacter = '-'

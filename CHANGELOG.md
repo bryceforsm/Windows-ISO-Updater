@@ -6,7 +6,20 @@ What changed in each release. Versions are dates, `yyyy.MM.dd.<revision>`. Relea
 
 ### Changed
 
-- The checksum file attached to each release is now `SHA256SUMS.txt`, so Windows opens it without asking which app to use. `2026.10.31.5` keeps its `SHA256SUMS` file.
+- When an update fails to apply, the run now says what the DISM error code usually means, prints DISM's whole message instead of only the lines containing "error", and shows the errors from DISM's log. The end of the run lists every package that failed and the image it failed on, including `boot.wim` and the recovery image. See [Logging](docs/reference.md#logging).
+- With `-KeepAllEditions`, the run now lists the editions it is keeping, with their index numbers.
+- DISM's log for each failed package is now saved in a `_DISM` folder beside the run's logs, so the `Logs` folder holds everything a bug report needs.
+
+- The checksum file attached to each release is now `Windows-ISO-Updater.SHA256SUMS.txt`. Windows opens it without asking which app to use, and the release page lists it after the two files it checks. `2026.10.31.5` keeps its `SHA256SUMS` file.
+
+### Fixed
+
+- The `Finished ISO` line printed at startup no longer claims the ISO will be named `Win11_EntPro_...` when the source is Windows Server or a release that has not been read yet. It now shows placeholders for the parts that come from the image, such as `<release>_<edition>_<arch>_...`. The finished ISO was always named correctly. ([#17](https://github.com/bryceforsm/Windows-ISO-Updater/issues/17))
+- A run started from a PowerShell 7 terminal no longer stops after downloading an update with `The term 'Get-FileHash' is not recognized`. Windows PowerShell was picking up PowerShell 7's module folders and could not load its own built-in commands.
+- Under PowerShell 7, a repeat run no longer hashes the whole source ISO again when it has not changed. The recorded file time never matched there, so the saved hash was never reused.
+- Build stamps written under PowerShell 7 and read under Windows PowerShell, or the other way round, now match when a path contains non-ASCII characters.
+- The cleanup task that removes a stuck mount folder after a restart now works when the working folder's path contains non-ASCII characters and the run used PowerShell 7.
+- Started from PowerShell 7 without administrator rights, the script now restarts elevated in PowerShell 7 instead of switching to Windows PowerShell.
 
 ## [2026.10.31.5](https://github.com/bryceforsm/Windows-ISO-Updater/releases/tag/2026.10.31.5) - 2026-10-31
 

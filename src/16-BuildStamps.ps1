@@ -154,7 +154,7 @@ function Get-BuildParameterHash {
 
 function Read-BuildStamp {
     if (-not (Test-Path -LiteralPath $StampFile -PathType Leaf)) { return $null }
-    try { return (Get-Content -LiteralPath $StampFile -Raw -ErrorAction Stop | ConvertFrom-Json) }
+    try { return (Get-Content -LiteralPath $StampFile -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json) }
     catch {
         Write-HostTimestamp "  The stamp '$StampFile' could not be read ($($_.Exception.Message)), so this is treated as a first run." -ForegroundColor Yellow
         return $null
@@ -176,7 +176,7 @@ function Get-PreviousBuildStamp {
 function Get-BuildStampHistory {
     $Stamps = New-Object System.Collections.Generic.List[object]
     foreach ($File in @(Get-ChildItem -LiteralPath $StampHistoryDir -Filter 'stamp_*.json' -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)) {
-        try { $Stamps.Add((Get-Content -LiteralPath $File.FullName -Raw -ErrorAction Stop | ConvertFrom-Json)) } catch { }
+        try { $Stamps.Add((Get-Content -LiteralPath $File.FullName -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json)) } catch { }
     }
     return $Stamps.ToArray()
 }
@@ -264,10 +264,28 @@ function Read-HashCache {
     try {
         # Windows PowerShell 5.1 emits a deserialised array as ONE pipeline item, so it has to be assigned
         # before @() can enumerate it. Wrapping the call itself yields an array holding a single array.
-        $Parsed = Get-Content -LiteralPath $HashCacheFile -Raw -ErrorAction Stop | ConvertFrom-Json
+        $Parsed = Get-Content -LiteralPath $HashCacheFile -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json
         return @($Parsed)
     }
     catch { return @() }   # an unreadable cache costs a re-hash, so it is rebuilt rather than reported
+}
+
+# True when a write time read back from a stamp or the hash cache is the file's current one. Windows PowerShell
+# hands the recorded value back as the round-trip string it was saved as, but PowerShell 7's ConvertFrom-Json
+# turns it into a DateTime, whose text form drops the fraction of a second, so comparing text never matches there.
+function Test-SameWriteTime {
+    param(
+        $Recorded,
+        [Parameter(Mandatory)][datetime]$Actual
+    )
+    if (-not $Recorded) { return $false }
+    if ($Recorded -isnot [datetime]) {
+        $Parsed = [datetime]::MinValue
+        if (-not [datetime]::TryParse("$Recorded", [System.Globalization.CultureInfo]::InvariantCulture,
+                [System.Globalization.DateTimeStyles]::RoundtripKind, [ref]$Parsed)) { return $false }
+        $Recorded = $Parsed
+    }
+    return ($Recorded.ToUniversalTime().Ticks -eq $Actual.ToUniversalTime().Ticks)
 }
 
 function Get-CachedSha256 {
@@ -275,7 +293,7 @@ function Get-CachedSha256 {
     foreach ($Entry in @(Read-HashCache)) {
         if ("$($Entry.Path)" -ieq $Item.FullName -and
             "$($Entry.Length)" -eq "$($Item.Length)" -and
-            "$($Entry.LastWriteTimeUtc)" -eq $Item.LastWriteTimeUtc.ToString('o')) {
+            (Test-SameWriteTime -Recorded $Entry.LastWriteTimeUtc -Actual $Item.LastWriteTimeUtc)) {
             return "$($Entry.Sha256)"
         }
     }
@@ -321,7 +339,7 @@ function Get-SourceIsoHash {
     if ($Stamp -and $Stamp.Source -and $Stamp.Source.Sha256 -and
         "$($Stamp.Source.Path)" -ieq $Item.FullName -and
         "$($Stamp.Source.Length)" -eq "$($Item.Length)" -and
-        "$($Stamp.Source.LastWriteTimeUtc)" -eq $Item.LastWriteTimeUtc.ToString('o')) {
+        (Test-SameWriteTime -Recorded $Stamp.Source.LastWriteTimeUtc -Actual $Item.LastWriteTimeUtc)) {
         Write-HostTimestamp '  The source ISO is untouched since the last run, so its recorded hash is reused.' -ForegroundColor DarkGray
         return "$($Stamp.Source.Sha256)"
     }

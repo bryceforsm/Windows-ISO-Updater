@@ -21,7 +21,7 @@ Installing Windows from this updated media saves time by eliminating large post-
 3. Right-click `Run-Windows-ISO-Updater.bat` and select **Run as administrator**.
 4. Confirm the build settings displayed in the console prompt.
 
-To verify a download, compare `Get-FileHash .\Windows-ISO-Updater.ps1` with the `SHA256SUMS.txt` file attached to the release.
+To verify a download, compare `Get-FileHash .\Windows-ISO-Updater.ps1` with the `Windows-ISO-Updater.SHA256SUMS.txt` file attached to the release.
 
 ### Command Examples
 
@@ -70,6 +70,22 @@ For search and easier navigation, read the documentation at [bryceforsm.github.i
 ## Reporting Issues
 
 For any problem with this tool, please [submit a GitHub issue](https://github.com/bryceforsm/Windows-ISO-Updater/issues).
+
+**Attach the logs from the run.** They show what the tool found, chose and did at each step, so an issue that includes them can usually be fixed without a round of follow-up questions. They are in the `Logs` folder under the working folder (`<WorkPath>\Logs`, or `-LogPath` if you set it). Attach these files from the run that went wrong:
+
+* `Windows-ISO-Updater_<date>_<time>.log`, the main log
+* `Windows-ISO-Updater_<date>_<time>_console.txt`, everything that appeared on screen
+* The `Windows-ISO-Updater_<date>_<time>_DISM` folder, if there is one. It is only created when an update failed to apply.
+
+Please also include:
+
+* The command you ran, or the JSON profile if you used `-ConfigPath`
+* Whether you started it from Windows PowerShell, PowerShell 7 or the `.bat` file
+* Where the source ISO came from, for example the Microsoft website, the Evaluation Center or Visual Studio subscriptions
+
+The logs record the computer name and the full paths the run used, which often include your Windows user name. Look them over and replace anything you would rather not post before attaching them. See [Logging](docs/reference.md#logging) for what each file contains.
+
+Issues and pull requests with no activity for 90 days are marked as stale and closed 14 days later. Any comment keeps one open.
 
 ## License
 

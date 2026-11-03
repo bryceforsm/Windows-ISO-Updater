@@ -5,9 +5,10 @@ BeforeAll {
     $Ast = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path -LiteralPath $ScriptFile).Path, [ref]$null, [ref]$null)
     $Names = @(
         'ConvertFrom-HotpatchCalendar', 'Read-ConfigFile', 'Format-ShortHash', 'Get-BuildParameterHash', 'Get-DefaultIsoName', 'Get-EditionRank', 'Get-EditionShortName',
+        'Get-DismErrorCode', 'Get-DismErrorMeaning', 'Get-DismLogError', 'Get-DismMessage', 'Save-DismLog',
         'Get-FileDownload', 'Get-HotpatchBaselineKb', 'Get-PatchTuesdayStart', 'Get-ScheduledTaskArgumentString', 'Get-ScriptCommandLine', 'Get-TextSha256',
         'Resolve-EditionIndexes', 'Search-UpdateCatalog', 'Select-DefaultEditions', 'Select-HotpatchBaselineEntry', 'Test-FidoUrl', 'Test-IsHotpatchBaseline',
-        'Test-MicrosoftDownloadUrl', 'Test-RebuildNeeded', 'Test-UpdatePackageFile'
+        'Test-MicrosoftDownloadUrl', 'Test-RebuildNeeded', 'Test-SameWriteTime', 'Test-UpdatePackageFile'
     )
     foreach ($Name in $Names) {
         $Definition = $Ast.Find({
@@ -238,6 +239,111 @@ Describe 'Get-FileDownload' {
         Get-FileDownload -Url 'https://example.test/a' -Destination $script:Target | Should -BeFalse
         Test-Path -LiteralPath $script:Target | Should -BeFalse
         Test-Path -LiteralPath "$script:Target.partial" | Should -BeFalse
+    }
+}
+
+Describe 'Test-SameWriteTime' {
+    BeforeAll {
+        $script:WriteTime = [datetime]::new(2026, 10, 28, 17, 20, 29, [System.DateTimeKind]::Utc).AddTicks(801861)
+    }
+
+    It 'matches the time after a round trip through JSON' {
+        # Windows PowerShell gives the string back and PowerShell 7 a DateTime, and both have to match.
+        $Recorded = (@{ Time = $script:WriteTime.ToString('o') } | ConvertTo-Json | ConvertFrom-Json).Time
+        Test-SameWriteTime -Recorded $Recorded -Actual $script:WriteTime | Should -BeTrue
+    }
+
+    It 'matches the recorded string and a DateTime' {
+        Test-SameWriteTime -Recorded $script:WriteTime.ToString('o') -Actual $script:WriteTime | Should -BeTrue
+        Test-SameWriteTime -Recorded $script:WriteTime -Actual $script:WriteTime | Should -BeTrue
+    }
+
+    It 'does not match a different time, even by a fraction of a second' {
+        Test-SameWriteTime -Recorded $script:WriteTime.AddTicks(-801861).ToString('o') -Actual $script:WriteTime | Should -BeFalse
+    }
+
+    It 'does not match <Recorded>' -TestCases @(
+        @{ Recorded = $null }
+        @{ Recorded = '' }
+        @{ Recorded = 'not a time' }
+    ) {
+        Test-SameWriteTime -Recorded $Recorded -Actual $script:WriteTime | Should -BeFalse
+    }
+}
+
+Describe 'Reporting a DISM failure' {
+    BeforeAll {
+        # What DISM prints when a package fails. The line that explains it has neither "error" nor a code.
+        $script:DismOutput = @(
+            'Deployment Image Servicing and Management tool'
+            'Version: 10.0.26100.1150'
+            ''
+            'Image Version: 10.0.22631.2428'
+            ''
+            'Processing 1 of 1 - Adding package Package_for_RollupFix~31bf3856ad364e35~amd64~~22621.6000.1.0'
+            '[==========================100.0%==========================]'
+            'An error occurred - Package_for_RollupFix Error: 0x800f0922'
+            ''
+            'Error: 0x800f0922'
+            ''
+            'The specified package is not applicable to this image.'
+            ''
+            'The DISM log file can be found at C:\Windows\Logs\DISM\dism.log'
+        )
+    }
+
+    It 'takes the code from DISM''s Error line' {
+        Get-DismErrorCode -Output $script:DismOutput -ExitCode 1 | Should -Be '0x800F0922'
+    }
+
+    It 'falls back to the exit code, written as hex' {
+        Get-DismErrorCode -Output @('nothing useful') -ExitCode -2146498530 | Should -Be '0x800F081E'
+    }
+
+    It 'explains a known code whatever its case' {
+        Get-DismErrorMeaning -Code '0x800f0922' | Should -Not -BeNullOrEmpty
+        Get-DismErrorMeaning -Code '0x80070070' | Should -Match 'disk space'
+    }
+
+    It 'returns nothing for an unknown code' {
+        Get-DismErrorMeaning -Code '0x12345678' | Should -BeNullOrEmpty
+    }
+
+    It 'keeps DISM''s explanation and drops the banner, progress bar and blank lines' {
+        $Message = @(Get-DismMessage -Output $script:DismOutput)
+        $Message | Should -Contain 'The specified package is not applicable to this image.'
+        $Message | Should -Contain 'Error: 0x800f0922'
+        $Message | Where-Object { $_ -match '^(Deployment Image|Version:|Image Version:|\[|The DISM log file)' } | Should -BeNullOrEmpty
+        $Message | Where-Object { -not $_ } | Should -BeNullOrEmpty
+    }
+
+    It 'reads only the Error lines from a DISM log, without their timestamps' {
+        $Log = Join-Path -Path $TestDrive -ChildPath 'dism.log'
+        Set-Content -LiteralPath $Log -Value @(
+            '2026-11-02 20:51:17, Info                  DISM   DISM Package Manager: Processing the package'
+            '2026-11-02 20:51:18, Error                 CBS    Failed to install the package. [HRESULT = 0x800f0922]'
+            '2026-11-02 20:51:18, Error                 DISM   DISM Package Manager: Failed while processing command add-package. hr:0x800f0922'
+        )
+        $Errors = @(Get-DismLogError -Path $Log)
+        $Errors.Count | Should -Be 2
+        $Errors[0] | Should -Be 'CBS Failed to install the package. [HRESULT = 0x800f0922]'
+    }
+
+    It 'returns nothing when the DISM log is missing' {
+        @(Get-DismLogError -Path (Join-Path -Path $TestDrive -ChildPath 'missing.log')).Count | Should -Be 0
+    }
+
+    It 'saves a failed package''s log under the KB and the image' {
+        $LogDir = Join-Path -Path $TestDrive -ChildPath 'Logs'
+        $LogStamp = '2026-11-02_20-50-53'
+        $Source = Join-Path -Path $TestDrive -ChildPath 'pkg.log'
+        Set-Content -LiteralPath $Source -Value 'log'
+        $Package = 'windows11.0-kb5134130-x64_0e59d2f988a5422dfb489e97faed3b3835fc7568.msu'
+        $First = Save-DismLog -Path $Source -Package $Package -ImageLabel 'install.wim index 1 (Windows 11 Pro)'
+        Split-Path -Leaf $First | Should -Be 'KB5134130_install.wim_index_1_(Windows_11_Pro).log'
+        Split-Path -Leaf (Split-Path -Parent $First) | Should -Be 'Windows-ISO-Updater_2026-11-02_20-50-53_DISM'
+        $Second = Save-DismLog -Path $Source -Package $Package -ImageLabel 'install.wim index 1 (Windows 11 Pro)'
+        Split-Path -Leaf $Second | Should -Be 'KB5134130_install.wim_index_1_(Windows_11_Pro)_2.log'
     }
 }
 

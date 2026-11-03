@@ -71,7 +71,8 @@ jobs:
               [System.IO.File]::WriteAllText($Target, ([System.IO.File]::ReadAllText((Join-Path -Path $PWD -ChildPath $Name)) -replace '\r?\n', "`r`n"), $Encoding)
               "$((Get-FileHash -LiteralPath $Target -Algorithm SHA256).Hash.ToLower())  $Name"
           }
-          [System.IO.File]::WriteAllText((Join-Path -Path $AssetFolder -ChildPath 'SHA256SUMS.txt'), (($Sums -join "`n") + "`n"), $Encoding)
+          # The release page lists assets by name, ignoring case, so this name keeps the checksums below the two files.
+          [System.IO.File]::WriteAllText((Join-Path -Path $AssetFolder -ChildPath 'Windows-ISO-Updater.SHA256SUMS.txt'), (($Sums -join "`n") + "`n"), $Encoding)
 
           Write-Host "Version $Version"
           Get-Content -LiteralPath $NotesFile
