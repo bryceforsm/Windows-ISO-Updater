@@ -1,5 +1,5 @@
 # Windows ISO Updater
-# Version: 2026.11.02.1   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
+# Version: 2026.11.02.2   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
 #
 #region Script overview
 # This script builds a fully up-to-date ("slipstreamed") Windows 11, Windows 10 or Windows Server

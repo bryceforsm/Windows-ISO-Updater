@@ -11,6 +11,7 @@ What changed in each release. Versions are dates, `yyyy.MM.dd.<revision>`. Relea
 ### Fixed
 
 - The `Finished ISO` line printed at startup no longer claims the ISO will be named `Win11_EntPro_...` when the source is Windows Server or a release that has not been read yet. It now shows placeholders for the parts that come from the image, such as `<release>_<edition>_<arch>_...`. The finished ISO was always named correctly. ([#17](https://github.com/bryceforsm/Windows-ISO-Updater/issues/17))
+- A run started from a PowerShell 7 terminal no longer stops after downloading an update with `The term 'Get-FileHash' is not recognized`. Windows PowerShell was picking up PowerShell 7's module folders and could not load its own built-in commands.
 
 ## [2026.10.31.5](https://github.com/bryceforsm/Windows-ISO-Updater/releases/tag/2026.10.31.5) - 2026-10-31
 

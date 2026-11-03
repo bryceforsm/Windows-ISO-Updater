@@ -6,7 +6,7 @@ $script:ScriptPath = $PSCommandPath
 
 # Kept in step with the header comment by tools\Update-Version.ps1, and shown in the log and recorded in
 # the build stamp so a finished ISO can be traced back to the exact script that built it.
-$ScriptVersion = '2026.11.02.1'
+$ScriptVersion = '2026.11.02.2'
 
 # A scheduled run has nobody to answer a prompt.
 if ($Scheduled) {
@@ -30,6 +30,15 @@ if ($PSVersionTable.PSVersion.Major -lt 5) {
     Write-Host "Please update your PowerShell version to proceed." -ForegroundColor Red
     Start-Sleep -Seconds 10
     exit 1
+}
+
+# Started from a PowerShell 7 terminal by way of cmd.exe (the .bat), Windows PowerShell inherits PowerShell 7's
+# module folders. pwsh only cleans them out for a powershell.exe it starts itself. Listed first, they make 5.1 try
+# PowerShell 7's own Microsoft.PowerShell.Utility and similar, which cannot load here, so commands such as
+# Get-FileHash vanish. Must come before the first command that is loaded on demand.
+if ($PSVersionTable.PSEdition -eq 'Desktop' -and $env:PSModulePath) {
+    $env:PSModulePath = (@($env:PSModulePath -split ';') |
+            Where-Object { $_ -and $_ -notmatch '(?i)\\PowerShell\\(\d+(\.\d+)*(-preview)?\\)?Modules\\?$' }) -join ';'
 }
 
 # Verify you are running on Windows 10 (or Windows Server 2016) or higher
