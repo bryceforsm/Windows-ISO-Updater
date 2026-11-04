@@ -9,6 +9,9 @@ The easiest and recommended way to run this script is by using the `Run-Windows-
 > [!NOTE]
 > This script is primarily designed and tested for Windows 11 with en-US locale. If you are running this on a system with a different locale or Windows 10, some features or output may not work as expected. Please report any locale-specific issues you encounter.
 
+> [!NOTE]
+> The script patches the media within its own release. A 24H2 ISO comes out as patched 24H2, not 25H2, so start from media for the release you want ([why](design-notes.md#why-the-release-never-changes)).
+
 ## Recommended Method: Using the Batch File
 
 1.  **Download Files:** Make sure both `Run-Windows-ISO-Updater.bat` and `Windows-ISO-Updater.ps1` are saved in the **same folder**.

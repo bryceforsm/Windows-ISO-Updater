@@ -87,6 +87,12 @@ The logs record the computer name and the full paths the run used, which often i
 
 Issues and pull requests with no activity for 90 days are marked as stale and closed 14 days later. Any comment keeps one open.
 
+## Feature Requests
+
+Ideas are welcome. [Open a GitHub issue](https://github.com/bryceforsm/Windows-ISO-Updater/issues) that describes what you want to do and why the tool does not cover it today. An example of the command or setup you have in mind helps.
+
+This tool is built to run hands off, from a single command or a scheduled task, and is kept tightly scoped to automating updated install media. Requests are weighed against that. Features that need someone at the screen, such as a graphical interface, may not be added, because they would make the tool more complex to use and to maintain without helping the automated builds it exists for.
+
 ## License
 
 Distributed under the [MIT License](LICENSE). Third-party utilities and Microsoft updates fetched during runtime remain governed by their respective vendor terms.
