@@ -17,11 +17,11 @@ Installing Windows from this updated media saves time by eliminating large post-
 ## Quick Start
 
 1. Place [`Run-Windows-ISO-Updater.bat`](https://github.com/bryceforsm/Windows-ISO-Updater/releases) and [`Windows-ISO-Updater.ps1`](https://github.com/bryceforsm/Windows-ISO-Updater/releases) in the same directory.
-2. Put an official Windows ISO in `C:\WISO-Work\Downloads` or specify its location with `-IsoPath`.
-3. Right-click `Run-Windows-ISO-Updater.bat` and select **Run as administrator**.
+2. Drag an official Windows ISO onto `Run-Windows-ISO-Updater.bat` and accept the administrator prompt. The tool builds from that ISO.
+3. Or put the ISO in `C:\WISO-Work\Downloads`, then right-click `Run-Windows-ISO-Updater.bat` and select **Run as administrator**.
 4. Confirm the build settings displayed in the console prompt.
 
-To verify a download, compare `Get-FileHash .\Windows-ISO-Updater.ps1` with the `Windows-ISO-Updater.SHA256SUMS.txt` file attached to the release.
+To speed up the update and shrink the ISO, the tool removes the editions you are unlikely to need. On client media it keeps Enterprise, Pro and Home, and on Server media it keeps one edition, Standard if the ISO has it. Use `-KeepAllEditions` to keep every edition, or `-KeepEditions` to pick which ones stay.
 
 ### Command Examples
 
