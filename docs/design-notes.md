@@ -95,6 +95,19 @@ The cost is one read-only mount, so it is arranged not to be paid twice:
 
 If the image has no `DisplayVersion` either, client media falls back to the broad query with a warning, and Server media stops instead. The Server product name without a version reads `Microsoft server operating system`, which matches every Server release ever published, so a broad search there is guaranteed to return the wrong thing.
 
+## Why the Release Never Changes
+
+The release the media starts on is the release it finishes on. A 24H2 ISO comes out as a fully patched 24H2 ISO, never as 25H2, and a 23H2 ISO stays 23H2. The release name read from the image is what every catalog query is built from, so the script only ever looks for that release's updates.
+
+Moving between releases is a different kind of change from patching one, and Microsoft delivers it in two ways:
+
+| Jump | How Microsoft ships it | Can the script do it? |
+| --- | --- | --- |
+| Between releases that share a code base, such as 24H2 to 25H2 | A small enablement package that switches on features already present but turned off | Not yet. The package can be added to an offline image with DISM, but the script has no logic to find or apply it. |
+| Between releases on different builds, such as 23H2 to 24H2 | A new operating system build, 22631 to 26100 in that case | No. No number of updates turns one build into another, so this needs new media. |
+
+To build the newer release, start from media for that release. Pass a 25H2 ISO with `-IsoPath`, or download one with `-UseFido -Release 25H2`. A machine installed from older media is not stuck there either: Windows Update offers it the feature update once it is online, unless policy holds it back.
+
 ## Why Both boot.wim Indexes Are Serviced
 
 `boot.wim` never becomes the installed OS (index 1 is Windows PE, index 2 is Windows Setup), so patching it looks like time that could be saved. It isn't, and both indexes get the same treatment as `install.wim`:
