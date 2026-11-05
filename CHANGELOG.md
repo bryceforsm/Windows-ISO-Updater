@@ -4,6 +4,10 @@ What changed in each release. Versions are dates, `yyyy.MM.dd.<revision>`. Relea
 
 ## [Unreleased]
 
+### Changed
+
+- Long console lines now wrap between words instead of being cut mid-word at the edge of the window. The rest of a wrapped line is indented to start under the message, not under the timestamp. The transcript has the same line breaks, and the CMTrace log still has each message on one line.
+
 ## [2026.11.02.5](https://github.com/bryceforsm/Windows-ISO-Updater/releases/tag/2026.11.02.5) - 2026-11-02
 
 ### Changed

@@ -59,15 +59,66 @@ function Write-CMTraceLog {
     catch { }   # a log that cannot be written must never be the reason a build stops
 }
 
+# The width to wrap console output at, or 0 when it should not be wrapped. Output that is redirected has no
+# edge to wrap at, and a host without a console buffer cannot report one.
+function Get-ConsoleWidth {
+    try {
+        if ([Console]::IsOutputRedirected) { return 0 }
+        return [int]$Host.UI.RawUI.BufferSize.Width
+    }
+    catch { return 0 }
+}
+
+# The console cuts a long line at its edge, mid-word, and carries on at column 0. This breaks it between
+# words instead, and starts each continuation $Indent columns in, so it lines up under the message rather
+# than under the timestamp. A path has no spaces, so it breaks after a separator, and a word is only cut
+# when it is wider than the console on its own.
+function Format-WrappedText {
+    param(
+        [string]$Text,
+        [int]$Width,
+        [int]$Indent = 0
+    )
+
+    if ($Width -le 0 -or $Text.Length -le $Width) { return $Text }
+    # On a narrow console a timestamp-wide indent would leave too little room for the message.
+    if ($Indent -gt [math]::Floor($Width / 2)) { $Indent = 0 }
+    $Pad = ' ' * $Indent
+    $Lines = [System.Collections.Generic.List[string]]::new()
+    $Rest = $Text
+    while ($Rest.Length -gt $Width) {
+        # The search starts past the indent, so a continuation cannot break inside its own padding.
+        $Floor = $Indent + 1
+        $Cut = $Rest.Substring(0, $Width + 1).LastIndexOf(' ')
+        if ($Cut -ge $Floor) {
+            $Head = $Rest.Substring(0, $Cut).TrimEnd()
+            $Tail = $Rest.Substring($Cut + 1).TrimStart()
+        }
+        else {
+            $Cut = $Rest.Substring(0, $Width).LastIndexOfAny([char[]]'\/_-')
+            if ($Cut -lt $Floor) { $Cut = $Width - 1 }
+            $Head = $Rest.Substring(0, $Cut + 1)
+            $Tail = $Rest.Substring($Cut + 1)
+        }
+        $Lines.Add($Head)
+        $Rest = $Pad + $Tail
+    }
+    $Lines.Add($Rest)
+    return $Lines.ToArray()
+}
+
 function Write-HostTimestamp {
     param (
         [string]$Message,
         [consolecolor]$ForegroundColor = $(try { ((Get-Host).ui.rawui.ForegroundColor) } catch { 'White' })
     )
 
-    # Get the current timestamp and combine it with the user's message.
-    # The output is then sent to the console using Write-Host with the specified color.
-    Write-Host "$(Get-TimeStamp) $Message" -ForegroundColor $ForegroundColor
+    # The console copy is wrapped to fit the window. The CMTrace log gets the message whole, on one line.
+    $Stamp = Get-TimeStamp
+    $Indent = $Stamp.Length + 1 + ($Message.Length - $Message.TrimStart().Length)
+    foreach ($Part in (Format-WrappedText -Text "$Stamp $Message" -Width (Get-ConsoleWidth) -Indent $Indent)) {
+        Write-Host $Part -ForegroundColor $ForegroundColor
+    }
     Write-CMTraceLog -Message $Message -Type (Get-LogSeverity -Color "$ForegroundColor") -Line $MyInvocation.ScriptLineNumber
 }
 
@@ -88,7 +139,10 @@ function Write-HostLog {
         [consolecolor]$ForegroundColor = $(try { ((Get-Host).ui.rawui.ForegroundColor) } catch { 'White' })
     )
 
-    Write-Host $Message -ForegroundColor $ForegroundColor
+    $Indent = $Message.Length - $Message.TrimStart().Length
+    foreach ($Part in (Format-WrappedText -Text $Message -Width (Get-ConsoleWidth) -Indent $Indent)) {
+        Write-Host $Part -ForegroundColor $ForegroundColor
+    }
     if ("$Message".Trim()) {
         Write-CMTraceLog -Message $Message -Type (Get-LogSeverity -Color "$ForegroundColor") -Line $MyInvocation.ScriptLineNumber
     }
