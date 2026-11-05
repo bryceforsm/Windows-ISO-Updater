@@ -4,6 +4,8 @@ Automate the process of updating Windows installation media. This PowerShell scr
 
 Installing Windows from this updated media saves time by eliminating large post-installation update downloads.
 
+![Console output of a Windows 11 build: the ISO is extracted, the latest cumulative update is downloaded and applied, and a new bootable ISO is written](docs/images/console.svg)
+
 ## Key Features
 
 * **Safe Execution**: All servicing happens inside a working folder (`C:\WISO-Work` by default), never on the running Windows. Outside that folder it only changes the host when asked to, with `-InstallAdk` or `-RegisterScheduledTask`, or if a mount cannot be released, when it registers a boot task that clears the mount and deletes itself.

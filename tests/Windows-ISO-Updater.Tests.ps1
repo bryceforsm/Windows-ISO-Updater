@@ -6,7 +6,7 @@ BeforeAll {
     $Names = @(
         'ConvertFrom-HotpatchCalendar', 'Read-ConfigFile', 'Format-ShortHash', 'Get-BuildParameterHash', 'Get-DefaultIsoName', 'Get-EditionRank', 'Get-EditionShortName',
         'Get-DismErrorCode', 'Get-DismErrorMeaning', 'Get-DismLogError', 'Get-DismMessage', 'Save-DismLog',
-        'Get-FileDownload', 'Get-HotpatchBaselineKb', 'Get-PatchTuesdayStart', 'Get-ScheduledTaskArgumentString', 'Get-ScriptCommandLine', 'Get-TextSha256',
+        'Format-WrappedText', 'Get-FileDownload', 'Get-HotpatchBaselineKb', 'Get-PatchTuesdayStart', 'Get-ScheduledTaskArgumentString', 'Get-ScriptCommandLine', 'Get-TextSha256',
         'Resolve-EditionIndexes', 'Search-UpdateCatalog', 'Select-DefaultEditions', 'Select-HotpatchBaselineEntry', 'Test-FidoUrl', 'Test-IsHotpatchBaseline',
         'Test-MicrosoftDownloadUrl', 'Test-RebuildNeeded', 'Test-SameWriteTime', 'Test-UpdatePackageFile'
     )
@@ -352,6 +352,49 @@ Describe 'Get-PatchTuesdayStart' {
         $Start = Get-PatchTuesdayStart
         $Start.TimeOfDay | Should -BeOfType [timespan]
         $Start.CrossesMidnight | Should -BeOfType [bool]
+    }
+}
+
+Describe 'Format-WrappedText' {
+    It 'leaves a line that fits alone' {
+        $Lines = @(Format-WrappedText -Text 'short line' -Width 40 -Indent 4)
+        $Lines | Should -Be @('short line')
+    }
+
+    It 'does not wrap when the width is unknown' {
+        $Text = 'x ' * 200
+        @(Format-WrappedText -Text $Text -Width 0) | Should -Be @($Text)
+    }
+
+    It 'breaks between words and indents the continuation' {
+        $Lines = @(Format-WrappedText -Text '[stamp] one two three four five' -Width 20 -Indent 8)
+        $Lines | Should -Be @('[stamp] one two', '        three four', '        five')
+    }
+
+    It 'breaks a path after a separator' {
+        $Lines = @(Format-WrappedText -Text 'saved to C:\Work\Output\image.iso' -Width 22 -Indent 3)
+        $Lines[0] | Should -Be 'saved to'
+        $Lines[1] | Should -Be '   C:\Work\Output\'
+        $Lines[2] | Should -Be '   image.iso'
+    }
+
+    It 'cuts a word only when it is wider than the console' {
+        $Lines = @(Format-WrappedText -Text ('a' * 25) -Width 10)
+        $Lines | Should -Be @(('a' * 10), ('a' * 10), ('a' * 5))
+    }
+
+    It 'drops an indent that would leave too little room' {
+        $Lines = @(Format-WrappedText -Text '[a long timestamp] word word word' -Width 24 -Indent 19)
+        $Lines | Should -Be @('[a long timestamp] word', 'word word')
+    }
+
+    It 'never writes a line wider than the console, and loses no words' {
+        $Text = '[10/14/2026|09:13:38] Keeping only the Enterprise, Pro and Home editions to speed up the build: C:\WISO-Work\Output\Win11_25H2_Pro_x64_en-US_26200.7019.iso'
+        foreach ($Width in 30, 47, 80, 100) {
+            $Lines = @(Format-WrappedText -Text $Text -Width $Width -Indent 22)
+            $Lines | ForEach-Object { $_.Length | Should -BeLessOrEqual $Width }
+            (($Lines | ForEach-Object { $_.Trim() }) -join '') -replace '\s', '' | Should -Be ($Text -replace '\s', '')
+        }
     }
 }
 
