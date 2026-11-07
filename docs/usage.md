@@ -104,6 +104,23 @@ Licensing Service Center, the Evaluation Center, or a Visual Studio subscription
 One thing to note: `-BaselineOnly` does not apply to LTSC media. LTSC has no hotpatch enrollment, so
 the cumulative update is applied every month regardless of the month type.
 
+## Windows 10 Media Stops at the October 2025 Update
+
+Windows 10 media from version 2004 to 22H2, which includes Windows 10 Enterprise LTSC 2021 and IoT
+Enterprise LTSC 2021, is updated only as far as the **October 2025** cumulative update (KB5066791), even
+when the catalog has a newer one. The Setup and Safe OS Dynamic Updates are picked from that date or
+earlier so they stay matched to it. The log says so when the search runs.
+
+Every cumulative update for these releases since November 2025 includes an Extended Security Updates
+step that will not install into an offline image, whichever source media you start from. DISM stops with
+`0x80073713` and the edition would ship with no update at all, so the script stops at the last update
+that installs. The later ones install once Windows is running, through Windows Update, WSUS or your
+management tool, or on their own with the
+[after-setup answer file](unattended-installs.md#finishing-the-updates-after-setup).
+
+A newer update supplied with `-UpdatePath` fails the same way. That edition then ships as the source media
+had it, and the run's tip names the ESU step as the cause. [Why the cap exists](design-notes.md#why-windows-10-stops-at-the-october-2025-update).
+
 ## Windows Server Specific Notes
 
 A few differences worth knowing:
@@ -116,8 +133,10 @@ A few differences worth knowing:
   to Datacenter in place with `DISM /Set-Edition`, but Datacenter can never be downgraded, so Standard is the
   edition that leaves both options open. Use `-KeepEditions` to pick Datacenter or a Server Core image
   instead, or `-KeepAllEditions` to keep every edition the media carries.
-- Microsoft only publishes a **Setup Dynamic Update** for Server 2025 and newer, so on older Server media
-  the script reports that none was found and refreshes the media Setup files from `boot.wim` alone.
+- Server 2022 and newer get both **Dynamic Updates**, even though the catalog titles them plain *"Dynamic
+  Update"* ([how they are told apart](design-notes.md#how-the-dynamic-updates-are-told-apart)). Microsoft does
+  not publish a Setup Dynamic Update for every Server release, so on media without one the script reports
+  that none was found and refreshes the media Setup files from `boot.wim` alone.
 - `-Server` is **deprecated and no longer needed**. The image is the source of truth, so a Server ISO passed with `-IsoPath` or dropped into the download folder is recognised on its own, and a yellow line names what was found whenever it differs from what the run expected. The switch is still accepted so existing scheduled tasks and wrapper scripts keep running. Before any ISO is in hand the only thing that can tell Server from client is the last build stamp in the same working folder, which is what stops a scheduled Server run whose ISO went missing from downloading client media instead.
 - **Give Server its own working folder if you also build client ISOs.** See
   [Building Several Windows Versions Side by Side](#building-several-windows-versions-side-by-side).

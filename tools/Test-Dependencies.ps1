@@ -208,6 +208,7 @@ function Get-ScriptAssignedLiterals {
 
 $Borrowed = @(
     'Get-KbTargetBuilds',
+    'Get-LcuTitleExclude',
     'Get-ScheduledTaskArgumentString',
     'Get-UpdateCatalogDownloadUrl',
     'ConvertFrom-HotpatchCalendar',
@@ -528,9 +529,18 @@ try {
         # A single match unrolls to a bare string on the way out of the function, and indexing a string
         # hands back a character, so both of these have to be re-wrapped here.
         $IncludePatterns = @(Get-ScriptAssignedLiterals -Name 'Include' -Match 'cumulative update')
-        $ExcludePatterns = @(Get-ScriptAssignedLiterals -Name 'Exclude' -Match 'dynamic update')
+        # The exclude filter is no literal: the download step and the rebuild check both assign it from
+        # Get-LcuTitleExclude, so it is read from there, as client media sees it, and the two cannot drift.
+        $ExcludeCalls = @($Ast.FindAll({
+                    param($Node)
+                    $Node -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+                    $Node.Left.Extent.Text -eq '$Exclude' -and
+                    $Node.Right.Extent.Text -eq 'Get-LcuTitleExclude'
+                }, $true))
+        $script:EffectiveServer = $false
+        $ExcludePatterns = @(if ($ExcludeCalls.Count -ge 2) { Get-LcuTitleExclude })
         if ($IncludePatterns.Count -eq 0 -or $ExcludePatterns.Count -eq 0) {
-            Add-Result -Area 'Titles' -Status 'Fail' -Message 'Could not find the cumulative update title filters in the script.' -Action 'The $Include/$Exclude literals were renamed or moved. Update Get-ScriptAssignedLiterals in this tester to match, otherwise nothing is checking that the script can still recognise an LCU.'
+            Add-Result -Area 'Titles' -Status 'Fail' -Message 'Could not find the cumulative update title filters in the script.' -Action 'The $Include literal or the two $Exclude = Get-LcuTitleExclude assignments (download step and rebuild check) were renamed or moved. Update this tester to match, otherwise nothing is checking that the script can still recognise an LCU.'
         }
         elseif ($IncludePatterns.Count -gt 1 -or $ExcludePatterns.Count -gt 1) {
             Add-Result -Area 'Titles' -Status 'Fail' -Message 'The download step and the rebuild check use different title filters.' -Action 'Get-ExpectedUpdateSet and the download step each define $Include/$Exclude and they have drifted apart. The stamp will report an update the build would never pick, so every scheduled run rebuilds. Make the two literals identical.'
