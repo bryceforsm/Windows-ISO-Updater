@@ -1,6 +1,6 @@
 # GENERATED FILE. Edit the files in src\ and run tools\Build-Script.ps1, because changes made here are overwritten.
 # Windows ISO Updater
-# Version: 2026.11.07.1   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
+# Version: 2026.11.07.2   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
 #
 #region Script overview
 # This script builds a fully up-to-date ("slipstreamed") Windows 11, Windows 10 or Windows Server
@@ -314,7 +314,7 @@ $script:ScriptPath = $PSCommandPath
 
 # Kept in step with the header comment by tools\Update-Version.ps1, and shown in the log and recorded in
 # the build stamp so a finished ISO can be traced back to the exact script that built it.
-$ScriptVersion = '2026.11.07.1'
+$ScriptVersion = '2026.11.07.2'
 
 # A scheduled run has nobody to answer a prompt.
 if ($Scheduled) {
@@ -1949,6 +1949,45 @@ function Select-HotpatchBaselineEntry {
     return @($Candidates | Where-Object { $_.Classification -eq 'Security Updates' -and (Test-IsHotpatchBaseline -Entry $_) })
 }
 
+# The newest cumulative update DISM can integrate into an offline image of this build, or $null for no limit.
+# From November 2025 the Windows 10 2004-22H2 updates (builds 19041-19045, which includes LTSC 2021) carry an
+# Extended Security Updates step that refuses an offline image: it logs "ESU: Offline is not supported" and DISM
+# then calls the image unserviceable. October 2025's is the last one that goes in, so the catalog is capped there
+# and the newer updates install once Windows is running. Any LCU lookup that must agree with the download step
+# (the build stamp, the recovery ISO's Safe OS bound) applies the same cap.
+function Get-OfflineLcuCutoff {
+    param([int]$Build)
+    if ($Build -ge 19041 -and $Build -le 19045) { return [datetime]::new(2025, 10, 31) }
+    return $null
+}
+
+# A catalog search returns only its 25 newest matches, so one bounded by an older date can come back with
+# nothing old enough. When even the oldest result is newer than the bound, the search is asked again with the
+# bound's month in front ("2025-10 Cumulative Update for ..."), which returns the months around it, and the two
+# result sets are merged for the caller's -NotAfter filter to choose from.
+function Search-UpdateCatalogUpTo {
+    param(
+        [Parameter(Mandatory)][string]$Query,
+        $NotAfter
+    )
+    $Results = @(Search-UpdateCatalog -Query $Query)
+    if (-not $NotAfter -or $Results.Count -eq 0) { return $Results }
+    $Dated = @($Results | Where-Object { $_.LastUpdated } | ForEach-Object { [datetime]$_.LastUpdated })
+    if ($Dated.Count -gt 0 -and ($Dated | Measure-Object -Minimum).Minimum -le [datetime]$NotAfter) { return $Results }
+    $Month = ([datetime]$NotAfter).ToString('yyyy-MM', [System.Globalization.CultureInfo]::InvariantCulture)
+    $Older = @(Search-UpdateCatalog -Query "$Month $Query")
+    $Seen = @{}
+    return @(@($Results) + @($Older) | Where-Object { $Key = "$($_.Guid)|$($_.Title)"; if ($Seen.ContainsKey($Key)) { $false } else { $Seen[$Key] = $true; $true } })
+}
+
+# Titles a cumulative update search turns up that are not the LCU for this media: .NET and Dynamic Updates
+# (including the "Dynamic Cumulative Update" twin of each LCU), and for client media the Server LCU of the same
+# version, which the "21H2" query returns too and which can carry a later date than the Windows 10 one.
+function Get-LcuTitleExclude {
+    if ($script:EffectiveServer) { return '(?i)\.net|dynamic (cumulative )?update' }
+    return '(?i)\.net|dynamic (cumulative )?update|server operating system'
+}
+
 # Finds the newest cumulative update in the catalog for a given search query, downloads it to the download
 # folder, and returns the local .msu path (or $null on failure). Preview releases are left out unless
 # -AllowPreview says otherwise.
@@ -1971,7 +2010,7 @@ function Get-LatestCatalogPackage {
     )
 
     Write-HostTimestamp "  Searching the Microsoft Update Catalog for: $Query"
-    $Results = Search-UpdateCatalog -Query $Query
+    $Results = Search-UpdateCatalogUpTo -Query $Query -NotAfter $(if ($PSBoundParameters.ContainsKey('NotAfter')) { $NotAfter })
     if (-not $Results -or $Results.Count -eq 0) {
         Write-HostTimestamp '  No catalog results were returned for that query.' -ForegroundColor Yellow
         return $null
@@ -2513,7 +2552,7 @@ function Get-CatalogLatestEntry {
         [switch]$BaselineOnly,
         [datetime]$NotAfter      # optional upper bound - packages released after this date are excluded
     )
-    $Results = Search-UpdateCatalog -Query $Query
+    $Results = Search-UpdateCatalogUpTo -Query $Query -NotAfter $(if ($PSBoundParameters.ContainsKey('NotAfter')) { $NotAfter })
     if (-not $Results -or $Results.Count -eq 0) { return $null }
     $Filtered = $Results
     if ($TitleInclude) { $Filtered = $Filtered | Where-Object { $_.Title -match $TitleInclude } }
@@ -2546,7 +2585,8 @@ function Get-CatalogEntryTag {
 function Get-ExpectedUpdateSet {
     param(
         [string]$FeatureName,
-        [string]$CatalogArch
+        [string]$CatalogArch,
+        [int]$Build              # the image's OS build, for the same offline cap the download step applies
     )
 
     if ($SkipUpdates) { return @('None') }
@@ -2562,14 +2602,17 @@ function Get-ExpectedUpdateSet {
 
     $Product = Get-CatalogProductQuery -FeatureUpdate $FeatureName
     $Include = '(?i)cumulative update (preview )?for (windows|microsoft server operating system)'
-    $Exclude = '(?i)\.net|dynamic update'
+    $Exclude = Get-LcuTitleExclude
     $Set = New-Object System.Collections.Generic.List[string]
     $script:CatalogTitles = @{}
 
-    # Same queries (including the broader fallback) the download step uses, so the two always agree.
-    $Lcu = Get-CatalogLatestEntry -Query "Cumulative Update for $Product for $CatalogArch-based Systems" -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview -BaselineOnly:$BaselineOnly
+    # Same queries (including the broader fallback) and offline cap the download step uses, so the two always agree.
+    $Cap = @{}
+    $Cutoff = Get-OfflineLcuCutoff -Build $Build
+    if ($Cutoff) { $Cap.NotAfter = $Cutoff }
+    $Lcu = Get-CatalogLatestEntry -Query "Cumulative Update for $Product for $CatalogArch-based Systems" -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview -BaselineOnly:$BaselineOnly @Cap
     if (-not $Lcu -and -not $script:EffectiveServer) {
-        $Lcu = Get-CatalogLatestEntry -Query "Cumulative Update for $(Get-CatalogProductQuery) for $CatalogArch-based Systems" -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview -BaselineOnly:$BaselineOnly
+        $Lcu = Get-CatalogLatestEntry -Query "Cumulative Update for $(Get-CatalogProductQuery) for $CatalogArch-based Systems" -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview -BaselineOnly:$BaselineOnly @Cap
     }
     if (-not $Lcu) { return $null }
     $script:CatalogTitles['LCU'] = $Lcu.Title
@@ -4151,7 +4194,7 @@ function Get-DismErrorMeaning {
         '0X800F0831' { 'the image is missing an earlier update this one builds on'; break }
         '0X80070228' { "the image's files do not match their manifests, which usually means a repacked or UUP-built ISO rather than an official one"; break }
         '0X80073712' { "the image's component store is damaged"; break }
-        '0X80073713' { 'the image can no longer be serviced and has to be discarded'; break }
+        '0X80073713' { 'one of the setup steps the update runs inside the image failed, so the image can no longer be serviced and has to be discarded'; break }
         '0X80070070' { 'there is not enough free disk space on the working drive'; break }
         '0X80070005' { 'access was denied, often because antivirus or another program is holding files in the mounted image'; break }
         '0X80070020' { 'another program has a file in the mounted image open, often antivirus, Explorer or the search indexer'; break }
@@ -4178,6 +4221,15 @@ function Test-DismImageUnserviceable {
     $Pattern = '(?i)no longer serviceable|Discard (the modified|this Windows) image'
     if ((@($Output) -join "`n") -match $Pattern) { return $true }
     return [bool](@(Get-DismLogError -Path $LogPath -Last 50) | Where-Object { $_ -match $Pattern })
+}
+
+# Windows 10 updates carry an Extended Security Updates step that will not run in an offline image. It logs this
+# as an Info line long before DISM gives up, so the errors at the end of the log never mention it. Only called
+# after a failure, so reading the whole log costs nothing on a run that works.
+function Test-DismEsuOfflineRefusal {
+    param([string]$LogPath)
+    if (-not $LogPath -or -not (Test-Path -LiteralPath $LogPath)) { return $false }
+    return [bool](Select-String -LiteralPath $LogPath -Pattern 'ESU: Offline is not supported' -SimpleMatch -List -ErrorAction SilentlyContinue)
 }
 
 # DISM's console output without its banner, progress bars and blank lines, which leaves its own account of what
@@ -4337,22 +4389,24 @@ function Add-UpdateGroup {
         $Detail = "DISM error $Code$(if ($Meaning) { ": $Meaning" })"
         Add-ServicingResult -Image $ImageLabel -Package $PackageName -Result 'Failed' -Detail $Detail -Checkpoints $Checkpoints
         # Most failures mention "Unattend.xml", which is a red herring, so the error code decides the advice.
+        # One message each, so Write-HostTimestamp wraps them to the console instead of a fixed width.
         if ($Unserviceable) {
-            Write-HostTimestamp '      Tip: DISM reports this image can no longer be serviced, so it will be discarded rather than saved' -ForegroundColor DarkGray
-            Write-HostTimestamp '      and keeps exactly what the source media had. Base media much older than the update, or media' -ForegroundColor DarkGray
-            Write-HostTimestamp '      that was repacked, is the usual cause. Newer official media usually resolves it.' -ForegroundColor DarkGray
+            $Discarded = 'Tip: DISM reports this image can no longer be serviced, so it will be discarded rather than saved, and this edition keeps exactly what the source media had.'
+            if (Test-DismEsuOfflineRefusal -LogPath $DismLog) {
+                Write-HostTimestamp "      $Discarded The update's Extended Security Updates step refuses to run on an offline image (it logged 'ESU: Offline is not supported'), so no ISO can carry this update and other media will not help. Windows installs it once setup finishes, through Windows Update or the after-setup answer file." -ForegroundColor DarkGray
+            }
+            else {
+                # 0x80073713 is ERROR_ADVANCED_INSTALLER_FAILED: one of the update's install-time steps failed.
+                $Cause = if ($Code -eq '0x80073713') { "One of the setup steps the update runs inside the image failed. The DISM log names it on the line with 'Failed execution of queue item Installer'." }
+                         else { 'Base media much older than the update, or media that was repacked, is the usual cause.' }
+                Write-HostTimestamp "      $Discarded $Cause An untouched official Microsoft ISO resolves it when the media is at fault." -ForegroundColor DarkGray
+            }
         }
         elseif ($Output -match '0x800f0823') {
-            Write-HostTimestamp '      Tip: 0x800F0823 means the image needs a newer servicing stack than it has, and the one' -ForegroundColor DarkGray
-            Write-HostTimestamp '      bundled in this update did not take. Base media several years older than the update is the' -ForegroundColor DarkGray
-            Write-HostTimestamp '      usual cause. Try newer media, or apply the standalone SSU for this release to the mounted' -ForegroundColor DarkGray
-            Write-HostTimestamp '      image by hand before re-running.' -ForegroundColor DarkGray
+            Write-HostTimestamp '      Tip: 0x800F0823 means the image needs a newer servicing stack than it has, and the one bundled in this update did not take. Base media several years older than the update is the usual cause. Try newer media, or apply the standalone SSU for this release to the mounted image by hand before re-running.' -ForegroundColor DarkGray
         }
         elseif ($Output -match '0x80070228') {
-            # A hash mismatch here just means the base image's files don't match their manifests - usually a
-            # repacked/UUP ISO rather than a clean Microsoft one. It's informational, not a crash.
-            Write-HostTimestamp '      Tip: this is typically the base image, not the update - the install.wim files did not match' -ForegroundColor DarkGray
-            Write-HostTimestamp '      their manifests (common with repacked/UUP ISOs). A clean official Microsoft ISO usually resolves it.' -ForegroundColor DarkGray
+            Write-HostTimestamp "      Tip: this is typically the base image, not the update. The install.wim files did not match their manifests, which is common with repacked or UUP-built ISOs. A clean official Microsoft ISO usually resolves it." -ForegroundColor DarkGray
         }
         return $false
     }
@@ -6318,8 +6372,11 @@ if ($RecoveryIsoOnly) {
         else {
             Invoke-Task -Description 'Looking for a Safe OS Dynamic Update for the recovery image...' -ScriptBlock {
                 $Product = Get-CatalogProductQuery -FeatureUpdate $script:RecoveryFeatureName
-                # Bounded by the cumulative update's date as in a full build, so both modes pick the same package.
-                $Lcu = Get-CatalogLatestEntry -Query "Cumulative Update for $Product for $CatalogArch-based Systems" -TitleInclude '(?i)cumulative update (preview )?for (windows|microsoft server operating system)' -TitleExclude '(?i)\.net|dynamic update' -AllowPreview:$IncludePreview
+                # Bounded by the cumulative update's date as in a full build, offline cap included, so both modes pick the same package.
+                $Cap = @{}
+                $Cutoff = Get-OfflineLcuCutoff -Build $ImageBuild
+                if ($Cutoff) { $Cap.NotAfter = $Cutoff }
+                $Lcu = Get-CatalogLatestEntry -Query "Cumulative Update for $Product for $CatalogArch-based Systems" -TitleInclude '(?i)cumulative update (preview )?for (windows|microsoft server operating system)' -TitleExclude (Get-LcuTitleExclude) -AllowPreview:$IncludePreview @Cap
                 $SafeOsArgs = @{
                     Query        = "Safe OS Dynamic Update $Product $CatalogArch"
                     DownloadDir  = $DlDir
@@ -6428,11 +6485,11 @@ if (-not $NoStamp) {
             $StampArch    = "$($script:PreviousStamp.Image.CatalogArch)"
             # Same correction as below, taken from the last stamp's recorded build instead of a mount,
             # since that is the whole point of this pre-extraction check.
+            $StampBuild = if ($script:PreviousStamp.Image.Build) { [int]$script:PreviousStamp.Image.Build } else { 0 }
             if (-not $script:EffectiveServer) {
-                $StampBuild = if ($script:PreviousStamp.Image.Build) { [int]$script:PreviousStamp.Image.Build } else { 0 }
                 $script:EffectiveWindowsVersion = if ($StampBuild -ge 22000) { '11' } elseif ($StampBuild -gt 0) { '10' } else { $WindowsVersion }
             }
-            $script:ExpectedUpdateSet = Get-ExpectedUpdateSet -FeatureName $StampFeature -CatalogArch $StampArch
+            $script:ExpectedUpdateSet = Get-ExpectedUpdateSet -FeatureName $StampFeature -CatalogArch $StampArch -Build $StampBuild
             $script:ExpectedUpdateFor = "$StampFeature|$StampArch"
 
             # Says out loud that the catalog really was queried - a run that finishes in a second
@@ -6689,7 +6746,7 @@ Write-Host $LineBreak
 # refreshed so the next run compares against the right thing.
 if (-not $NoStamp -and $script:ExpectedUpdateFor -ne "$FeatureName|$CatalogArch") {
     Invoke-Task -Description 'Checking which updates the Microsoft Update Catalog is offering for this image...' -ScriptBlock {
-        $script:ExpectedUpdateSet = Get-ExpectedUpdateSet -FeatureName $FeatureName -CatalogArch $CatalogArch
+        $script:ExpectedUpdateSet = Get-ExpectedUpdateSet -FeatureName $FeatureName -CatalogArch $CatalogArch -Build $ImageBuild
         $script:ExpectedUpdateFor = "$FeatureName|$CatalogArch"
         if ($script:ExpectedUpdateSet) { Write-HostTimestamp "  $($script:ExpectedUpdateSet -join ', ')" -ForegroundColor DarkGray }
     }
@@ -6762,20 +6819,26 @@ else {
         # cumulative updates and exclude the .NET / Dynamic Update entries the same query returns. The
         # optional "Preview" word has to be allowed through here, because whether a preview is acceptable
         # is -IncludePreview's decision to make, not this pattern's.
+        $script:LcuCutoff = Get-OfflineLcuCutoff -Build $ImageBuild
         $Query = "Cumulative Update for $(Get-CatalogProductQuery -FeatureUpdate $FeatureName) for $CatalogArch-based Systems"
         $Include = '(?i)cumulative update (preview )?for (windows|microsoft server operating system)'
-        $Exclude = '(?i)\.net|dynamic update'
+        $Exclude = Get-LcuTitleExclude
         $script:LcuUpToDate = $null
         $script:LcuSkippedBaselineOnly = $false
         $script:LcuReapplied = $false
         $script:LcuReleaseDate = $null
-        $script:Lcu = Get-LatestCatalogPackage -Query $Query -DownloadDir $DlDir -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview -CurrentBuild $ImageBuild -CurrentUbr $ImageUbr -VerifyWimPath $InstallWimExtracted -VerifyPatchLevel:$VerifyPatchLevel -Reapply:$ReapplyUpdates -AlreadyCurrent ([ref]$script:LcuUpToDate) -BaselineOnly:$BaselineOnly -SelectedDate ([ref]$script:LcuReleaseDate)
+        $Cap = @{}
+        if ($script:LcuCutoff) {
+            $Cap.NotAfter = $script:LcuCutoff
+            Write-HostTimestamp "  Build $ImageBuild cumulative updates released after $($script:LcuCutoff.ToString('MMMM yyyy', [System.Globalization.CultureInfo]::InvariantCulture)) carry an Extended Security Updates step that refuses to run on an offline image, so the newest one before that is used. Windows installs the later ones after setup." -ForegroundColor DarkGray
+        }
+        $script:Lcu = Get-LatestCatalogPackage -Query $Query -DownloadDir $DlDir -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview -CurrentBuild $ImageBuild -CurrentUbr $ImageUbr -VerifyWimPath $InstallWimExtracted -VerifyPatchLevel:$VerifyPatchLevel -Reapply:$ReapplyUpdates -AlreadyCurrent ([ref]$script:LcuUpToDate) -BaselineOnly:$BaselineOnly -SelectedDate ([ref]$script:LcuReleaseDate) @Cap
         if (-not $script:Lcu -and -not $script:LcuUpToDate -and -not $script:EffectiveServer) {
             # Retry with a looser query (some releases omit the "Version xxHx" token in the title). Server
             # media is excluded because its product name without the version matches every Server release.
             $Query2 = "Cumulative Update for $(Get-CatalogProductQuery) for $CatalogArch-based Systems"
             Write-HostTimestamp "  Retrying with a broader query: $Query2" -ForegroundColor Yellow
-            $script:Lcu = Get-LatestCatalogPackage -Query $Query2 -DownloadDir $DlDir -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview -CurrentBuild $ImageBuild -CurrentUbr $ImageUbr -VerifyWimPath $InstallWimExtracted -VerifyPatchLevel:$VerifyPatchLevel -Reapply:$ReapplyUpdates -AlreadyCurrent ([ref]$script:LcuUpToDate) -BaselineOnly:$BaselineOnly -SelectedDate ([ref]$script:LcuReleaseDate)
+            $script:Lcu = Get-LatestCatalogPackage -Query $Query2 -DownloadDir $DlDir -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview -CurrentBuild $ImageBuild -CurrentUbr $ImageUbr -VerifyWimPath $InstallWimExtracted -VerifyPatchLevel:$VerifyPatchLevel -Reapply:$ReapplyUpdates -AlreadyCurrent ([ref]$script:LcuUpToDate) -BaselineOnly:$BaselineOnly -SelectedDate ([ref]$script:LcuReleaseDate) @Cap
         }
     }
     if ($script:Lcu) {
@@ -6788,7 +6851,8 @@ else {
     elseif ($script:LcuUpToDate) {
         # Nothing will change the OS build now, so reuse the build already confirmed by the check.
         if (-not $script:FinalBuildString) { $script:FinalBuildString = $script:LcuUpToDate }
-        Write-HostTimestamp "The image is already fully patched ($script:LcuUpToDate), so no cumulative update is needed." -ForegroundColor Green
+        $Patched = if ($script:LcuCutoff) { 'as far as an offline update can take it' } else { 'fully patched' }
+        Write-HostTimestamp "The image is already $Patched ($script:LcuUpToDate), so no cumulative update is needed." -ForegroundColor Green
         Add-ServicingResult -Image 'install.wim, boot.wim, winre.wim and the media sources folder' -Package 'Cumulative, .NET, Setup and Safe OS Dynamic Updates' -Result 'Skipped' -Detail "The media is already at $script:LcuUpToDate, so it is left as it shipped"
         Write-HostTimestamp '  The .NET update, both Dynamic Updates and boot.wim are left exactly as the media shipped them, so its Setup files stay matched to its images. Use -ReapplyUpdates to integrate everything anyway.' -ForegroundColor DarkGray
         Write-Host $LineBreak

@@ -5,7 +5,7 @@ BeforeAll {
     $Ast = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path -LiteralPath $ScriptFile).Path, [ref]$null, [ref]$null)
     $Names = @(
         'ConvertFrom-HotpatchCalendar', 'Read-ConfigFile', 'Format-ShortHash', 'Get-BuildParameterHash', 'Get-DefaultIsoName', 'Get-EditionRank', 'Get-EditionShortName', 'Get-FeatureUpdateName',
-        'Get-DismErrorCode', 'Get-DismErrorMeaning', 'Get-DismLogError', 'Get-DismMessage', 'Save-DismLog', 'Format-ExitCode', 'Test-DismImageUnserviceable', 'Get-CabFileList', 'Expand-ServicingStack', 'Test-StandaloneServicingStack',
+        'Get-DismErrorCode', 'Get-DismErrorMeaning', 'Get-DismLogError', 'Get-DismMessage', 'Save-DismLog', 'Format-ExitCode', 'Test-DismImageUnserviceable', 'Test-DismEsuOfflineRefusal', 'Get-OfflineLcuCutoff', 'Get-LcuTitleExclude', 'Search-UpdateCatalogUpTo', 'Get-CatalogLatestEntry','Get-CabFileList', 'Expand-ServicingStack', 'Test-StandaloneServicingStack',
         'Format-ByteProgress', 'Format-DismProgressDetail', 'Format-Duration', 'Format-ProgressLine', 'Format-WrappedText', 'Get-DismPercent', 'Get-FileDownload', 'Get-RobocopyPercent', 'Test-BitsUsable', 'Test-PathInList', 'Get-WinHttpProxy', 'Test-VirtualMachineModel', 'Format-Gigabytes', 'Format-Uptime', 'Get-HotpatchBaselineKb', 'Get-PatchTuesdayStart', 'Get-ScheduledTaskArgumentString', 'Get-ScriptCommandLine', 'Get-TextSha256',
         'Resolve-EditionIndexes', 'Search-UpdateCatalog', 'Select-DefaultEditions', 'Select-HotpatchBaselineEntry', 'Test-FidoUrl', 'Test-IsHotpatchBaseline',
         'Test-MicrosoftDownloadUrl', 'Test-RebuildNeeded', 'Test-SameWriteTime', 'Test-UpdatePackageFile'
@@ -192,6 +192,63 @@ Describe 'The hotpatch calendar' {
     }
 }
 
+Describe 'The offline cumulative update cap' {
+    It 'caps build <Build> at October 2025' -TestCases @(
+        @{ Build = 19041 }, @{ Build = 19044 }, @{ Build = 19045 }
+    ) {
+        Get-OfflineLcuCutoff -Build $Build | Should -Be ([datetime]'2025-10-31')
+    }
+
+    It 'leaves build <Build> uncapped' -TestCases @(
+        @{ Build = 0 }, @{ Build = 17763 }, @{ Build = 18363 }, @{ Build = 20348 }, @{ Build = 26100 }
+    ) {
+        Get-OfflineLcuCutoff -Build $Build | Should -BeNullOrEmpty
+    }
+
+    It 'passes over the November 2025 update for capped media' {
+        Mock Search-UpdateCatalog {
+            @(
+                [pscustomobject]@{ Title = '2025-10 Cumulative Update for Windows 10 Version 21H2 for x64-based Systems (KB5066791)'; LastUpdated = [datetime]'2025-10-14'; SizeMB = 700; Guid = 'a' }
+                [pscustomobject]@{ Title = '2025-11 Cumulative Update for Windows 10 Version 21H2 for x64-based Systems (KB5068781)'; LastUpdated = [datetime]'2025-11-11'; SizeMB = 700; Guid = 'b' }
+            )
+        }
+        $Entry = Get-CatalogLatestEntry -Query 'Cumulative Update' -NotAfter (Get-OfflineLcuCutoff -Build 19044)
+        $Entry.Title | Should -Match 'KB5066791'
+    }
+
+    It "searches again by month when the catalog's 25 newest results are all past the cap" {
+        Mock Search-UpdateCatalog -ParameterFilter { $Query -notlike '2025-10 *' } {
+            @([pscustomobject]@{ Title = '2026-10 Cumulative Update for Windows 10 Version 21H2 for x64-based Systems (KB5134125)'; LastUpdated = [datetime]'2026-10-26'; SizeMB = 700; Guid = 'new' })
+        }
+        Mock Search-UpdateCatalog -ParameterFilter { $Query -like '2025-10 *' } {
+            @(
+                [pscustomobject]@{ Title = '2025-10 Cumulative Update for Windows 10 Version 21H2 for x64-based Systems (KB5066791)'; LastUpdated = [datetime]'2025-10-14'; SizeMB = 700; Guid = 'oct' }
+                [pscustomobject]@{ Title = '2025-11 Cumulative Update for Windows 10 Version 21H2 for x64-based Systems (KB5068781)'; LastUpdated = [datetime]'2025-11-11'; SizeMB = 700; Guid = 'nov' }
+            )
+        }
+        $Entry = Get-CatalogLatestEntry -Query 'Cumulative Update for Windows 10 Version 21H2 for x64-based Systems' -NotAfter ([datetime]'2025-10-31')
+        $Entry.Title | Should -Match 'KB5066791'
+        Should -Invoke Search-UpdateCatalog -Times 1 -Exactly -ParameterFilter { $Query -eq '2025-10 Cumulative Update for Windows 10 Version 21H2 for x64-based Systems' }
+    }
+
+    It 'does not search again when the results already reach back past the cap' {
+        Mock Search-UpdateCatalog { @([pscustomobject]@{ Title = 'x (KB1)'; LastUpdated = [datetime]'2025-09-09'; SizeMB = 1; Guid = 'sep' }) }
+        @(Search-UpdateCatalogUpTo -Query 'q' -NotAfter ([datetime]'2025-10-31')).Count | Should -Be 1
+        Should -Invoke Search-UpdateCatalog -Times 1 -Exactly
+    }
+
+    It 'keeps the Server and Dynamic Cumulative twins out of a client LCU search' {
+        $script:EffectiveServer = $false
+        $Exclude = Get-LcuTitleExclude
+        '2025-10 Cumulative Update for Microsoft server operating system version 21H2 for x64-based Systems (KB5070884)' | Should -Match $Exclude
+        '2025-10 Dynamic Cumulative Update for Windows 10 Version 21H2 for x64-based Systems (KB5066791)' | Should -Match $Exclude
+        '2025-10 Cumulative Update for Windows 10 Version 21H2 for x64-based Systems (KB5066791)' | Should -Not -Match $Exclude
+        $script:EffectiveServer = $true
+        '2025-10 Cumulative Update for Microsoft server operating system version 21H2 for x64-based Systems (KB5070884)' | Should -Not -Match (Get-LcuTitleExclude)
+        $script:EffectiveServer = $false
+    }
+}
+
 Describe 'Test-UpdatePackageFile' {
     BeforeAll {
         $script:Sample = Join-Path -Path $TestDrive -ChildPath 'sample.bin'
@@ -347,6 +404,17 @@ Describe 'Reporting a DISM failure' {
         $Log = Join-Path -Path $TestDrive -ChildPath 'discard.log'
         Set-Content -LiteralPath $Log -Value '2026-11-07 11:42:23, Error                 DISM   DISM Package Manager: PID=4936 TID=9320 Discard this Windows image and try the operation again on a new Windows image. - GetCbsErrorMsg'
         Test-DismImageUnserviceable -Output @('Error: 0x800f0830') -LogPath $Log | Should -BeTrue
+    }
+
+    It "spots the ESU step refusing an offline image, logged as Info well before DISM's errors" {
+        $Log = Join-Path -Path $TestDrive -ChildPath 'esu.log'
+        Set-Content -LiteralPath $Log -Value @(
+            '2026-11-07 12:47:11, Info                  CSI    00000002 ESU: Offline is not supported HRESULT_FROM_WIN32(1625).'
+            '2026-11-07 12:47:38, Error                 DISM   DISM Package Manager: PID=8452 TID=9036 Discard this Windows image and try the operation again on a new Windows image. - GetCbsErrorMsg'
+        )
+        Test-DismEsuOfflineRefusal -LogPath $Log | Should -BeTrue
+        Test-DismEsuOfflineRefusal -LogPath (Join-Path -Path $TestDrive -ChildPath 'discard.log') | Should -BeFalse
+        Test-DismEsuOfflineRefusal -LogPath (Join-Path -Path $TestDrive -ChildPath 'missing.log') | Should -BeFalse
     }
 
     It 'does not treat an ordinary failure as unserviceable' {

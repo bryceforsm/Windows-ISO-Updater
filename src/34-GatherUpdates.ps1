@@ -63,20 +63,26 @@ else {
         # cumulative updates and exclude the .NET / Dynamic Update entries the same query returns. The
         # optional "Preview" word has to be allowed through here, because whether a preview is acceptable
         # is -IncludePreview's decision to make, not this pattern's.
+        $script:LcuCutoff = Get-OfflineLcuCutoff -Build $ImageBuild
         $Query = "Cumulative Update for $(Get-CatalogProductQuery -FeatureUpdate $FeatureName) for $CatalogArch-based Systems"
         $Include = '(?i)cumulative update (preview )?for (windows|microsoft server operating system)'
-        $Exclude = '(?i)\.net|dynamic update'
+        $Exclude = Get-LcuTitleExclude
         $script:LcuUpToDate = $null
         $script:LcuSkippedBaselineOnly = $false
         $script:LcuReapplied = $false
         $script:LcuReleaseDate = $null
-        $script:Lcu = Get-LatestCatalogPackage -Query $Query -DownloadDir $DlDir -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview -CurrentBuild $ImageBuild -CurrentUbr $ImageUbr -VerifyWimPath $InstallWimExtracted -VerifyPatchLevel:$VerifyPatchLevel -Reapply:$ReapplyUpdates -AlreadyCurrent ([ref]$script:LcuUpToDate) -BaselineOnly:$BaselineOnly -SelectedDate ([ref]$script:LcuReleaseDate)
+        $Cap = @{}
+        if ($script:LcuCutoff) {
+            $Cap.NotAfter = $script:LcuCutoff
+            Write-HostTimestamp "  Build $ImageBuild cumulative updates released after $($script:LcuCutoff.ToString('MMMM yyyy', [System.Globalization.CultureInfo]::InvariantCulture)) carry an Extended Security Updates step that refuses to run on an offline image, so the newest one before that is used. Windows installs the later ones after setup." -ForegroundColor DarkGray
+        }
+        $script:Lcu = Get-LatestCatalogPackage -Query $Query -DownloadDir $DlDir -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview -CurrentBuild $ImageBuild -CurrentUbr $ImageUbr -VerifyWimPath $InstallWimExtracted -VerifyPatchLevel:$VerifyPatchLevel -Reapply:$ReapplyUpdates -AlreadyCurrent ([ref]$script:LcuUpToDate) -BaselineOnly:$BaselineOnly -SelectedDate ([ref]$script:LcuReleaseDate) @Cap
         if (-not $script:Lcu -and -not $script:LcuUpToDate -and -not $script:EffectiveServer) {
             # Retry with a looser query (some releases omit the "Version xxHx" token in the title). Server
             # media is excluded because its product name without the version matches every Server release.
             $Query2 = "Cumulative Update for $(Get-CatalogProductQuery) for $CatalogArch-based Systems"
             Write-HostTimestamp "  Retrying with a broader query: $Query2" -ForegroundColor Yellow
-            $script:Lcu = Get-LatestCatalogPackage -Query $Query2 -DownloadDir $DlDir -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview -CurrentBuild $ImageBuild -CurrentUbr $ImageUbr -VerifyWimPath $InstallWimExtracted -VerifyPatchLevel:$VerifyPatchLevel -Reapply:$ReapplyUpdates -AlreadyCurrent ([ref]$script:LcuUpToDate) -BaselineOnly:$BaselineOnly -SelectedDate ([ref]$script:LcuReleaseDate)
+            $script:Lcu = Get-LatestCatalogPackage -Query $Query2 -DownloadDir $DlDir -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview -CurrentBuild $ImageBuild -CurrentUbr $ImageUbr -VerifyWimPath $InstallWimExtracted -VerifyPatchLevel:$VerifyPatchLevel -Reapply:$ReapplyUpdates -AlreadyCurrent ([ref]$script:LcuUpToDate) -BaselineOnly:$BaselineOnly -SelectedDate ([ref]$script:LcuReleaseDate) @Cap
         }
     }
     if ($script:Lcu) {
@@ -89,7 +95,8 @@ else {
     elseif ($script:LcuUpToDate) {
         # Nothing will change the OS build now, so reuse the build already confirmed by the check.
         if (-not $script:FinalBuildString) { $script:FinalBuildString = $script:LcuUpToDate }
-        Write-HostTimestamp "The image is already fully patched ($script:LcuUpToDate), so no cumulative update is needed." -ForegroundColor Green
+        $Patched = if ($script:LcuCutoff) { 'as far as an offline update can take it' } else { 'fully patched' }
+        Write-HostTimestamp "The image is already $Patched ($script:LcuUpToDate), so no cumulative update is needed." -ForegroundColor Green
         Add-ServicingResult -Image 'install.wim, boot.wim, winre.wim and the media sources folder' -Package 'Cumulative, .NET, Setup and Safe OS Dynamic Updates' -Result 'Skipped' -Detail "The media is already at $script:LcuUpToDate, so it is left as it shipped"
         Write-HostTimestamp '  The .NET update, both Dynamic Updates and boot.wim are left exactly as the media shipped them, so its Setup files stay matched to its images. Use -ReapplyUpdates to integrate everything anyway.' -ForegroundColor DarkGray
         Write-Host $LineBreak

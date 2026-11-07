@@ -422,7 +422,7 @@ function Get-DismErrorMeaning {
         '0X800F0831' { 'the image is missing an earlier update this one builds on'; break }
         '0X80070228' { "the image's files do not match their manifests, which usually means a repacked or UUP-built ISO rather than an official one"; break }
         '0X80073712' { "the image's component store is damaged"; break }
-        '0X80073713' { 'the image can no longer be serviced and has to be discarded'; break }
+        '0X80073713' { 'one of the setup steps the update runs inside the image failed, so the image can no longer be serviced and has to be discarded'; break }
         '0X80070070' { 'there is not enough free disk space on the working drive'; break }
         '0X80070005' { 'access was denied, often because antivirus or another program is holding files in the mounted image'; break }
         '0X80070020' { 'another program has a file in the mounted image open, often antivirus, Explorer or the search indexer'; break }
@@ -449,6 +449,15 @@ function Test-DismImageUnserviceable {
     $Pattern = '(?i)no longer serviceable|Discard (the modified|this Windows) image'
     if ((@($Output) -join "`n") -match $Pattern) { return $true }
     return [bool](@(Get-DismLogError -Path $LogPath -Last 50) | Where-Object { $_ -match $Pattern })
+}
+
+# Windows 10 updates carry an Extended Security Updates step that will not run in an offline image. It logs this
+# as an Info line long before DISM gives up, so the errors at the end of the log never mention it. Only called
+# after a failure, so reading the whole log costs nothing on a run that works.
+function Test-DismEsuOfflineRefusal {
+    param([string]$LogPath)
+    if (-not $LogPath -or -not (Test-Path -LiteralPath $LogPath)) { return $false }
+    return [bool](Select-String -LiteralPath $LogPath -Pattern 'ESU: Offline is not supported' -SimpleMatch -List -ErrorAction SilentlyContinue)
 }
 
 # DISM's console output without its banner, progress bars and blank lines, which leaves its own account of what
@@ -608,22 +617,24 @@ function Add-UpdateGroup {
         $Detail = "DISM error $Code$(if ($Meaning) { ": $Meaning" })"
         Add-ServicingResult -Image $ImageLabel -Package $PackageName -Result 'Failed' -Detail $Detail -Checkpoints $Checkpoints
         # Most failures mention "Unattend.xml", which is a red herring, so the error code decides the advice.
+        # One message each, so Write-HostTimestamp wraps them to the console instead of a fixed width.
         if ($Unserviceable) {
-            Write-HostTimestamp '      Tip: DISM reports this image can no longer be serviced, so it will be discarded rather than saved' -ForegroundColor DarkGray
-            Write-HostTimestamp '      and keeps exactly what the source media had. Base media much older than the update, or media' -ForegroundColor DarkGray
-            Write-HostTimestamp '      that was repacked, is the usual cause. Newer official media usually resolves it.' -ForegroundColor DarkGray
+            $Discarded = 'Tip: DISM reports this image can no longer be serviced, so it will be discarded rather than saved, and this edition keeps exactly what the source media had.'
+            if (Test-DismEsuOfflineRefusal -LogPath $DismLog) {
+                Write-HostTimestamp "      $Discarded The update's Extended Security Updates step refuses to run on an offline image (it logged 'ESU: Offline is not supported'), so no ISO can carry this update and other media will not help. Windows installs it once setup finishes, through Windows Update or the after-setup answer file." -ForegroundColor DarkGray
+            }
+            else {
+                # 0x80073713 is ERROR_ADVANCED_INSTALLER_FAILED: one of the update's install-time steps failed.
+                $Cause = if ($Code -eq '0x80073713') { "One of the setup steps the update runs inside the image failed. The DISM log names it on the line with 'Failed execution of queue item Installer'." }
+                         else { 'Base media much older than the update, or media that was repacked, is the usual cause.' }
+                Write-HostTimestamp "      $Discarded $Cause An untouched official Microsoft ISO resolves it when the media is at fault." -ForegroundColor DarkGray
+            }
         }
         elseif ($Output -match '0x800f0823') {
-            Write-HostTimestamp '      Tip: 0x800F0823 means the image needs a newer servicing stack than it has, and the one' -ForegroundColor DarkGray
-            Write-HostTimestamp '      bundled in this update did not take. Base media several years older than the update is the' -ForegroundColor DarkGray
-            Write-HostTimestamp '      usual cause. Try newer media, or apply the standalone SSU for this release to the mounted' -ForegroundColor DarkGray
-            Write-HostTimestamp '      image by hand before re-running.' -ForegroundColor DarkGray
+            Write-HostTimestamp '      Tip: 0x800F0823 means the image needs a newer servicing stack than it has, and the one bundled in this update did not take. Base media several years older than the update is the usual cause. Try newer media, or apply the standalone SSU for this release to the mounted image by hand before re-running.' -ForegroundColor DarkGray
         }
         elseif ($Output -match '0x80070228') {
-            # A hash mismatch here just means the base image's files don't match their manifests - usually a
-            # repacked/UUP ISO rather than a clean Microsoft one. It's informational, not a crash.
-            Write-HostTimestamp '      Tip: this is typically the base image, not the update - the install.wim files did not match' -ForegroundColor DarkGray
-            Write-HostTimestamp '      their manifests (common with repacked/UUP ISOs). A clean official Microsoft ISO usually resolves it.' -ForegroundColor DarkGray
+            Write-HostTimestamp "      Tip: this is typically the base image, not the update. The install.wim files did not match their manifests, which is common with repacked or UUP-built ISOs. A clean official Microsoft ISO usually resolves it." -ForegroundColor DarkGray
         }
         return $false
     }

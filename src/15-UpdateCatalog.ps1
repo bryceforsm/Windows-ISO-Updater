@@ -215,6 +215,45 @@ function Select-HotpatchBaselineEntry {
     return @($Candidates | Where-Object { $_.Classification -eq 'Security Updates' -and (Test-IsHotpatchBaseline -Entry $_) })
 }
 
+# The newest cumulative update DISM can integrate into an offline image of this build, or $null for no limit.
+# From November 2025 the Windows 10 2004-22H2 updates (builds 19041-19045, which includes LTSC 2021) carry an
+# Extended Security Updates step that refuses an offline image: it logs "ESU: Offline is not supported" and DISM
+# then calls the image unserviceable. October 2025's is the last one that goes in, so the catalog is capped there
+# and the newer updates install once Windows is running. Any LCU lookup that must agree with the download step
+# (the build stamp, the recovery ISO's Safe OS bound) applies the same cap.
+function Get-OfflineLcuCutoff {
+    param([int]$Build)
+    if ($Build -ge 19041 -and $Build -le 19045) { return [datetime]::new(2025, 10, 31) }
+    return $null
+}
+
+# A catalog search returns only its 25 newest matches, so one bounded by an older date can come back with
+# nothing old enough. When even the oldest result is newer than the bound, the search is asked again with the
+# bound's month in front ("2025-10 Cumulative Update for ..."), which returns the months around it, and the two
+# result sets are merged for the caller's -NotAfter filter to choose from.
+function Search-UpdateCatalogUpTo {
+    param(
+        [Parameter(Mandatory)][string]$Query,
+        $NotAfter
+    )
+    $Results = @(Search-UpdateCatalog -Query $Query)
+    if (-not $NotAfter -or $Results.Count -eq 0) { return $Results }
+    $Dated = @($Results | Where-Object { $_.LastUpdated } | ForEach-Object { [datetime]$_.LastUpdated })
+    if ($Dated.Count -gt 0 -and ($Dated | Measure-Object -Minimum).Minimum -le [datetime]$NotAfter) { return $Results }
+    $Month = ([datetime]$NotAfter).ToString('yyyy-MM', [System.Globalization.CultureInfo]::InvariantCulture)
+    $Older = @(Search-UpdateCatalog -Query "$Month $Query")
+    $Seen = @{}
+    return @(@($Results) + @($Older) | Where-Object { $Key = "$($_.Guid)|$($_.Title)"; if ($Seen.ContainsKey($Key)) { $false } else { $Seen[$Key] = $true; $true } })
+}
+
+# Titles a cumulative update search turns up that are not the LCU for this media: .NET and Dynamic Updates
+# (including the "Dynamic Cumulative Update" twin of each LCU), and for client media the Server LCU of the same
+# version, which the "21H2" query returns too and which can carry a later date than the Windows 10 one.
+function Get-LcuTitleExclude {
+    if ($script:EffectiveServer) { return '(?i)\.net|dynamic (cumulative )?update' }
+    return '(?i)\.net|dynamic (cumulative )?update|server operating system'
+}
+
 # Finds the newest cumulative update in the catalog for a given search query, downloads it to the download
 # folder, and returns the local .msu path (or $null on failure). Preview releases are left out unless
 # -AllowPreview says otherwise.
@@ -237,7 +276,7 @@ function Get-LatestCatalogPackage {
     )
 
     Write-HostTimestamp "  Searching the Microsoft Update Catalog for: $Query"
-    $Results = Search-UpdateCatalog -Query $Query
+    $Results = Search-UpdateCatalogUpTo -Query $Query -NotAfter $(if ($PSBoundParameters.ContainsKey('NotAfter')) { $NotAfter })
     if (-not $Results -or $Results.Count -eq 0) {
         Write-HostTimestamp '  No catalog results were returned for that query.' -ForegroundColor Yellow
         return $null

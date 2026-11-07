@@ -377,7 +377,7 @@ function Get-CatalogLatestEntry {
         [switch]$BaselineOnly,
         [datetime]$NotAfter      # optional upper bound - packages released after this date are excluded
     )
-    $Results = Search-UpdateCatalog -Query $Query
+    $Results = Search-UpdateCatalogUpTo -Query $Query -NotAfter $(if ($PSBoundParameters.ContainsKey('NotAfter')) { $NotAfter })
     if (-not $Results -or $Results.Count -eq 0) { return $null }
     $Filtered = $Results
     if ($TitleInclude) { $Filtered = $Filtered | Where-Object { $_.Title -match $TitleInclude } }
@@ -410,7 +410,8 @@ function Get-CatalogEntryTag {
 function Get-ExpectedUpdateSet {
     param(
         [string]$FeatureName,
-        [string]$CatalogArch
+        [string]$CatalogArch,
+        [int]$Build              # the image's OS build, for the same offline cap the download step applies
     )
 
     if ($SkipUpdates) { return @('None') }
@@ -426,14 +427,17 @@ function Get-ExpectedUpdateSet {
 
     $Product = Get-CatalogProductQuery -FeatureUpdate $FeatureName
     $Include = '(?i)cumulative update (preview )?for (windows|microsoft server operating system)'
-    $Exclude = '(?i)\.net|dynamic update'
+    $Exclude = Get-LcuTitleExclude
     $Set = New-Object System.Collections.Generic.List[string]
     $script:CatalogTitles = @{}
 
-    # Same queries (including the broader fallback) the download step uses, so the two always agree.
-    $Lcu = Get-CatalogLatestEntry -Query "Cumulative Update for $Product for $CatalogArch-based Systems" -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview -BaselineOnly:$BaselineOnly
+    # Same queries (including the broader fallback) and offline cap the download step uses, so the two always agree.
+    $Cap = @{}
+    $Cutoff = Get-OfflineLcuCutoff -Build $Build
+    if ($Cutoff) { $Cap.NotAfter = $Cutoff }
+    $Lcu = Get-CatalogLatestEntry -Query "Cumulative Update for $Product for $CatalogArch-based Systems" -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview -BaselineOnly:$BaselineOnly @Cap
     if (-not $Lcu -and -not $script:EffectiveServer) {
-        $Lcu = Get-CatalogLatestEntry -Query "Cumulative Update for $(Get-CatalogProductQuery) for $CatalogArch-based Systems" -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview -BaselineOnly:$BaselineOnly
+        $Lcu = Get-CatalogLatestEntry -Query "Cumulative Update for $(Get-CatalogProductQuery) for $CatalogArch-based Systems" -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview -BaselineOnly:$BaselineOnly @Cap
     }
     if (-not $Lcu) { return $null }
     $script:CatalogTitles['LCU'] = $Lcu.Title
