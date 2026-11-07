@@ -7,6 +7,30 @@ What changed in each release. Versions are dates, `yyyy.MM.dd.<revision>`. Relea
 ### Added
 
 - Every run's log now starts with a short report on the machine: the Windows version and patch level, PowerShell and DISM versions, who the run is and whether BITS can work for it, the active antivirus, whether a restart is pending and when the machine last restarted, the working drive's file system, free space and disk type, any proxy, and the hardware. A log attached to an issue then answers the usual first questions. A restart pending for the servicing stack or Windows Update is shown in yellow, because it can make DISM fail. See [Logging](docs/reference.md#logging).
+- `Examples/autounattend-update-after-setup.xml` finishes the updates an ISO cannot carry, once Windows is installed: Defender's security intelligence, whatever Windows Update still offers (drivers, the Malicious Software Removal Tool, anything published after the ISO was built), and the Microsoft Store's apps. It changes nothing else about Setup and never restarts the computer. See [Finishing the Updates After Setup](docs/unattended-installs.md#finishing-the-updates-after-setup).
+
+### Changed
+
+- `-UseFido` now runs Fido v1.72, which adds UEFI Shell 26H2 downloads and changes nothing about how Windows ISOs are fetched.
+- While DISM applies an update or cleans up an image, the time beside the progress bar now counts up every second, even when DISM prints nothing for minutes. Before, the line only changed when DISM's percentage did, so a long quiet stretch looked like a hang. After a minute at the same percentage, the line adds `still working (no change for ...)`, and committing and exporting an image do the same. A note before the first update explains that DISM's percentage is only a rough guide and can sit at one figure for a long time before jumping. See [Watching a Build's Progress](docs/usage.md#watching-a-builds-progress).
+
+### Removed
+
+- The four experimental example answer files (`autounattend-lab-admin.xml`, `autounattend-gold-image.xml`, `autounattend-ultimate.xml` and `autounattend-driver-install.xml`) and `tools/Sync-EmbeddedDriverScripts.ps1`, which only kept copies of the driver scripts inside one of them. The driver scripts in `tools/` remain, and work on their own.
+
+### Fixed
+
+- An image that DISM reports can no longer be serviced is now discarded instead of saved, so that edition ships exactly as the source media had it. Before, it was saved anyway and could be left half-updated, with a build number from an update that never finished installing. The summary at the end lists the image and every update it lost.
+- The servicing stack update bundled inside the cumulative update is now applied to each image on its own, before any update. Before, it was left for DISM to install as part of the cumulative update, which fails with `0x800F0823` on media whose servicing stack is too old, and the failed attempt can leave the image unserviceable. If an update still fails with `0x800F0823`, the servicing stack is applied again before the second attempt, where before the update was just tried again.
+- A standalone servicing stack update in the `-UpdatePath` folder is now recognised and applied on its own, first. Before, it was only staged beside the highest-numbered package as if it were a checkpoint, so it never went in.
+- The .NET cumulative update for Windows 10 and Server 2022 now applies both of its packages, for .NET 4.8 and 4.8.1. Before, the 4.8 package was treated as a checkpoint of the 4.8.1 one and never applied, so an image with .NET 4.8 did not get the update.
+- The tip about repacked or UUP media is now shown only for the error it describes, `0x80070228`. Before, any failure whose message mentioned `Unattend.xml` showed it, and most do.
+- Failed DISM exit codes are printed as hex, such as `0x800F0823`, instead of as a large negative number.
+- Windows 10 media at build 19041, 19042 or 19043 (2004, 20H2 and 21H1, and LTSC 2021 media, which also reports 19041) is now recognised straight away and searched for as 21H2. Those releases share 21H2's cumulative update, and Microsoft still publishes it under that name. Before, the run spent a few minutes mounting the image to read its release name, and said the build was newer than any release the script knew.
+- A step that took over an hour could have its hours rounded up in the timing, such as 1h 36m shown as 2h 36m.
+- Windows 10 media from version 2004 to 22H2, including LTSC 2021, is now updated with the October 2025 cumulative update (KB5066791) instead of failing. Every cumulative update for these releases since November 2025 has an Extended Security Updates step that refuses an offline image, so DISM stopped with `0x80073713`, the image was discarded and that edition shipped with no update at all. The later updates install once Windows is running. When an update still fails this way, such as one supplied with `-UpdatePath`, the tip names the ESU step instead of blaming the media. See [Windows 10 Media Stops at the October 2025 Update](docs/usage.md#windows-10-media-stops-at-the-october-2025-update).
+- Windows 10 and Server 2022 media now get the Setup and Safe OS Dynamic Updates. The catalog titles both plain "Dynamic Update" for these releases, so Windows 10 media got neither, and Server media took whichever was larger, which is not always the Safe OS one. Each is now identified by its catalog description. See [How the Dynamic Updates Are Told Apart](docs/design-notes.md#how-the-dynamic-updates-are-told-apart).
+- A Windows 10 search could pick the Windows 11 or Server Dynamic Update of the same version, because the catalog returns them for the same query, and could pick a Server cumulative update released later than the Windows 10 one. Dynamic Updates must now name the media's own product and architecture, and a client search passes over Server cumulative updates.
 
 ## [2026.11.06.8](https://github.com/bryceforsm/Windows-ISO-Updater/releases/tag/2026.11.06.8) - 2026-11-06
 

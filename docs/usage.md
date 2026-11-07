@@ -31,7 +31,7 @@ To use command-line parameters, run the batch file from a Command Prompt or Powe
     .\Run-Windows-ISO-Updater.bat -Unattended -InstallAdk -Edition "Windows 11 Pro"
     ```
 
-Relative paths such as `.\Examples\autounattend-lab-admin.xml` are read from the folder you ran it in, even after the administrator prompt reopens it in a new window. Run from a terminal, the batch file waits for the script and passes on its exit code, so `-CheckOnly` can be scripted against it. Double-clicked or dropped onto from Explorer, its own window closes as soon as the administrator window opens.
+Relative paths such as `.\Examples\autounattend-update-after-setup.xml` are read from the folder you ran it in, even after the administrator prompt reopens it in a new window. Run from a terminal, the batch file waits for the script and passes on its exit code, so `-CheckOnly` can be scripted against it. Double-clicked or dropped onto from Explorer, its own window closes as soon as the administrator window opens.
 
 The full list is in [Command-Line Parameters](parameters.md).
 
@@ -104,6 +104,23 @@ Licensing Service Center, the Evaluation Center, or a Visual Studio subscription
 One thing to note: `-BaselineOnly` does not apply to LTSC media. LTSC has no hotpatch enrollment, so
 the cumulative update is applied every month regardless of the month type.
 
+## Windows 10 Media Stops at the October 2025 Update
+
+Windows 10 media from version 2004 to 22H2, which includes Windows 10 Enterprise LTSC 2021 and IoT
+Enterprise LTSC 2021, is updated only as far as the **October 2025** cumulative update (KB5066791), even
+when the catalog has a newer one. The Setup and Safe OS Dynamic Updates are picked from that date or
+earlier so they stay matched to it. The log says so when the search runs.
+
+Every cumulative update for these releases since November 2025 includes an Extended Security Updates
+step that will not install into an offline image, whichever source media you start from. DISM stops with
+`0x80073713` and the edition would ship with no update at all, so the script stops at the last update
+that installs. The later ones install once Windows is running, through Windows Update, WSUS or your
+management tool, or on their own with the
+[after-setup answer file](unattended-installs.md#finishing-the-updates-after-setup).
+
+A newer update supplied with `-UpdatePath` fails the same way. That edition then ships as the source media
+had it, and the run's tip names the ESU step as the cause. [Why the cap exists](design-notes.md#why-windows-10-stops-at-the-october-2025-update).
+
 ## Windows Server Specific Notes
 
 A few differences worth knowing:
@@ -116,8 +133,10 @@ A few differences worth knowing:
   to Datacenter in place with `DISM /Set-Edition`, but Datacenter can never be downgraded, so Standard is the
   edition that leaves both options open. Use `-KeepEditions` to pick Datacenter or a Server Core image
   instead, or `-KeepAllEditions` to keep every edition the media carries.
-- Microsoft only publishes a **Setup Dynamic Update** for Server 2025 and newer, so on older Server media
-  the script reports that none was found and refreshes the media Setup files from `boot.wim` alone.
+- Server 2022 and newer get both **Dynamic Updates**, even though the catalog titles them plain *"Dynamic
+  Update"* ([how they are told apart](design-notes.md#how-the-dynamic-updates-are-told-apart)). Microsoft does
+  not publish a Setup Dynamic Update for every Server release, so on media without one the script reports
+  that none was found and refreshes the media Setup files from `boot.wim` alone.
 - `-Server` is **deprecated and no longer needed**. The image is the source of truth, so a Server ISO passed with `-IsoPath` or dropped into the download folder is recognised on its own, and a yellow line names what was found whenever it differs from what the run expected. The switch is still accepted so existing scheduled tasks and wrapper scripts keep running. Before any ISO is in hand the only thing that can tell Server from client is the last build stamp in the same working folder, which is what stops a scheduled Server run whose ISO went missing from downloading client media instead.
 - **Give Server its own working folder if you also build client ISOs.** See
   [Building Several Windows Versions Side by Side](#building-several-windows-versions-side-by-side).
@@ -238,6 +257,10 @@ Every kept edition is serviced by default, so a two-edition build takes roughly 
 
 `-KeepEditions` accepts edition names (partial matches allowed) or index numbers, and overrides the default. Only the kept editions are serviced and re-exported, so the removed editions are gone from the final `install.wim`. If none of your values match any edition in the ISO, all editions are kept instead (the script prints a warning and lists the available editions). A partial mismatch (some values match, some don't) exits with error 1. It works with `-SkipUpdates` too, if you only want to trim editions without integrating updates.
 
+## Watching a Build's Progress
+
+While DISM works, a progress line shows its percentage and how long the step has taken. Treat the percentage as a rough guide. How DISM counts depends on the update, so a cumulative update can sit at one figure for many minutes and then jump, and a commit says nothing at all for its first few minutes. The time keeps counting every second while DISM is running, and after a minute at one figure the line adds `still working (no change for ...)`, so a quiet stretch is easy to tell from a hang. If the time itself stops counting, check that the console window is not in selection mode: a click inside it starts selecting text, which pauses the script until you press `Esc`.
+
 ## Speeding Up a Build
 
 DISM has no setting that makes it faster, but most of a build's time goes on things you can choose. In order of how much they usually save:
@@ -292,7 +315,7 @@ Things worth knowing:
 - **It is build-affecting.** The stamp records a hash of the whole folder, so swapping in a newer driver forces a rebuild on the next scheduled run even though the path did not change.
 - **Drivers go in after the updates**, so an inbox driver the cumulative update brings along cannot supersede the one you supplied.
 
-The alternative that needs no rebuild is a `$WinPEDriver$` folder at the root of the USB stick. Both answer files in [`Examples/`](../Examples) look for one on every drive, `drvload` each `.inf` into the running WinPE, then run `dism /Add-Driver` against the freshly applied image. That is the better choice for a driver that only one machine needs.
+The alternative that needs no rebuild is a `$WinPEDriver$` folder at the root of the USB stick, or of any other drive the machine can see while Setup runs. Windows Setup looks for one on its own, with no answer file needed, and loads its drivers both into Setup and into the Windows it installs. That is the better choice for a driver that only one machine needs.
 
 ## Adding Your Own Files to the ISO
 

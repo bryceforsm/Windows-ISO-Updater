@@ -24,7 +24,8 @@ function Get-FriendlyDate {
 
 function Format-Duration {
     param([TimeSpan]$Duration)
-    if ($Duration.TotalHours -ge 1) { return ('{0}h {1:00}m {2:00}s' -f [int]$Duration.TotalHours, $Duration.Minutes, $Duration.Seconds) }
+    # Floored, because [int] rounds and would show 1h 36m as 2h 36m.
+    if ($Duration.TotalHours -ge 1) { return ('{0}h {1:00}m {2:00}s' -f [math]::Floor($Duration.TotalHours), $Duration.Minutes, $Duration.Seconds) }
     if ($Duration.TotalMinutes -ge 1) { return ('{0}m {1:00}s' -f $Duration.Minutes, $Duration.Seconds) }
     return ('{0:N1}s' -f $Duration.TotalSeconds)
 }

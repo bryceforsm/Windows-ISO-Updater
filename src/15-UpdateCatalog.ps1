@@ -215,6 +215,106 @@ function Select-HotpatchBaselineEntry {
     return @($Candidates | Where-Object { $_.Classification -eq 'Security Updates' -and (Test-IsHotpatchBaseline -Entry $_) })
 }
 
+# The newest cumulative update DISM can integrate into an offline image of this build, or $null for no limit.
+# From November 2025 the Windows 10 2004-22H2 updates (builds 19041-19045, which includes LTSC 2021) carry an
+# Extended Security Updates step that refuses an offline image: it logs "ESU: Offline is not supported" and DISM
+# then calls the image unserviceable. October 2025's is the last one that goes in, so the catalog is capped there
+# and the newer updates install once Windows is running. Any LCU lookup that must agree with the download step
+# (the build stamp, the recovery ISO's Safe OS bound) applies the same cap.
+function Get-OfflineLcuCutoff {
+    param([int]$Build)
+    if ($Build -ge 19041 -and $Build -le 19045) { return [datetime]::new(2025, 10, 31) }
+    return $null
+}
+
+# A catalog search returns only its 25 newest matches, so one bounded by an older date can come back with
+# nothing old enough. When even the oldest result is newer than the bound, the search is asked again with the
+# bound's month in front ("2025-10 Cumulative Update for ..."), which returns the months around it, and the two
+# result sets are merged for the caller's -NotAfter filter to choose from.
+function Search-UpdateCatalogUpTo {
+    param(
+        [Parameter(Mandatory)][string]$Query,
+        $NotAfter
+    )
+    $Results = @(Search-UpdateCatalog -Query $Query)
+    if (-not $NotAfter -or $Results.Count -eq 0) { return $Results }
+    $Dated = @($Results | Where-Object { $_.LastUpdated } | ForEach-Object { [datetime]$_.LastUpdated })
+    if ($Dated.Count -gt 0 -and ($Dated | Measure-Object -Minimum).Minimum -le [datetime]$NotAfter) { return $Results }
+    $Month = ([datetime]$NotAfter).ToString('yyyy-MM', [System.Globalization.CultureInfo]::InvariantCulture)
+    $Older = @(Search-UpdateCatalog -Query "$Month $Query")
+    $Seen = @{}
+    return @(@($Results) + @($Older) | Where-Object { $Key = "$($_.Guid)|$($_.Title)"; if ($Seen.ContainsKey($Key)) { $false } else { $Seen[$Key] = $true; $true } })
+}
+
+# Titles a cumulative update search turns up that are not the LCU for this media: .NET and Dynamic Updates
+# (including the "Dynamic Cumulative Update" twin of each LCU), and for client media the Server LCU of the same
+# version, which the "21H2" query returns too and which can carry a later date than the Windows 10 one.
+function Get-LcuTitleExclude {
+    if ($script:EffectiveServer) { return '(?i)\.net|dynamic (cumulative )?update' }
+    return '(?i)\.net|dynamic (cumulative )?update|server operating system'
+}
+
+# Which Dynamic Update a catalog entry is: 'SafeOS', 'Setup' or $null. Windows 11 says so in the title, but Windows
+# 10 and Server title both kinds plain "Dynamic Update", and size cannot tell them apart (in July 2025 the Windows 10
+# Safe OS update was the smaller of the two). The entry's catalog details page can: its description reads
+# "ComponentUpdate:" for a Safe OS update and "SetupUpdate:" for a Setup one, matching what the KB support pages
+# call them. The support pages themselves refuse Windows PowerShell after its first request, so they are not used.
+# Read once per entry per run.
+function Get-DynamicUpdateKind {
+    param($Entry)
+    $Title = "$($Entry.Title)"
+    if ($Title -match '(?i)safe os dynamic update') { return 'SafeOS' }
+    if ($Title -match '(?i)setup dynamic update') { return 'Setup' }
+    if ($Title -notmatch '(?i)\bdynamic update\b' -or -not $Entry.Guid) { return $null }
+    $Guid = "$($Entry.Guid)"
+    if (-not $script:DynamicUpdateKindCache) { $script:DynamicUpdateKindCache = @{} }
+    if ($script:DynamicUpdateKindCache.ContainsKey($Guid)) { return $script:DynamicUpdateKindCache[$Guid] }
+    $Kind = $null
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    try {
+        $Page = Invoke-WebRequest -Uri "https://www.catalog.update.microsoft.com/ScopedViewInline.aspx?updateid=$([System.Uri]::EscapeDataString($Guid))" -UseBasicParsing -TimeoutSec 60 -ErrorAction Stop
+        if ("$($Page.Content)" -match '(?s)id="ScopedViewHandler_desc"[^>]*>(.*?)</span>') {
+            $Description = $Matches[1]
+            if ($Description -match '(?i)\bComponentUpdate\b|recovery environment') { $Kind = 'SafeOS' }
+            elseif ($Description -match '(?i)\bSetupUpdate\b|setup binaries') { $Kind = 'Setup' }
+        }
+        if (-not $Kind) { Write-HostTimestamp "  The catalog does not say which Dynamic Update '$Title' is, so it is passed over." -ForegroundColor DarkYellow }
+    }
+    catch { Write-HostTimestamp "  Could not read the catalog details for '$Title' to tell which Dynamic Update it is, so it is passed over." -ForegroundColor DarkYellow }
+    $script:DynamicUpdateKindCache[$Guid] = $Kind
+    return $Kind
+}
+
+# The newest of a set of catalog entries that is the wanted kind of Dynamic Update. Walks them newest first and
+# stops at the first match, so at most a few support pages are read.
+function Select-DynamicUpdateEntry {
+    param(
+        [object[]]$Candidates,
+        [Parameter(Mandatory)][ValidateSet('SafeOS', 'Setup')][string]$Kind
+    )
+    $Sorted = @($Candidates | Sort-Object -Property @{ Expression = { $_.LastUpdated }; Descending = $true }, @{ Expression = { $_.SizeMB }; Descending = $true })
+    foreach ($Entry in $Sorted) {
+        if ((Get-DynamicUpdateKind -Entry $Entry) -eq $Kind) { return $Entry }
+    }
+    return $null
+}
+
+# The catalog search for a Dynamic Update of this media: the query, and a title pattern that holds the result to
+# this product and architecture. The search matches words loosely, so a Windows 10 22H2 query also returns the
+# Windows 11 22H2 and Server 21H2 Dynamic Updates; titles write "Windows 11, version 24H2" where the product says
+# "Windows 11 Version 24H2", so spaces in the product match a comma too.
+function Get-DynamicUpdateSearch {
+    param(
+        [Parameter(Mandatory)][string]$Product,
+        [Parameter(Mandatory)][string]$CatalogArch
+    )
+    $ProductPattern = (($Product -split '\s+') | ForEach-Object { [regex]::Escape($_) }) -join '[\s,]+'
+    return @{
+        Query        = "Dynamic Update $Product $CatalogArch"
+        TitleInclude = "(?i)dynamic update for $ProductPattern\b.*\b$([regex]::Escape($CatalogArch))-based"
+    }
+}
+
 # Finds the newest cumulative update in the catalog for a given search query, downloads it to the download
 # folder, and returns the local .msu path (or $null on failure). Preview releases are left out unless
 # -AllowPreview says otherwise.
@@ -233,11 +333,12 @@ function Get-LatestCatalogPackage {
         [ref]$AlreadyCurrent,    # receives the image's confirmed build when the update is not needed
         [switch]$BaselineOnly,
         [datetime]$NotAfter,     # optional upper bound - packages released after this date are excluded
-        [ref]$SelectedDate       # receives the selected package's LastUpdated, for bounding a later query by it
+        [ref]$SelectedDate,      # receives the selected package's LastUpdated, for bounding a later query by it
+        [ValidateSet('SafeOS', 'Setup')][string]$DynamicUpdateKind  # keep only this kind of Dynamic Update
     )
 
     Write-HostTimestamp "  Searching the Microsoft Update Catalog for: $Query"
-    $Results = Search-UpdateCatalog -Query $Query
+    $Results = Search-UpdateCatalogUpTo -Query $Query -NotAfter $(if ($PSBoundParameters.ContainsKey('NotAfter')) { $NotAfter })
     if (-not $Results -or $Results.Count -eq 0) {
         Write-HostTimestamp '  No catalog results were returned for that query.' -ForegroundColor Yellow
         return $null
@@ -253,6 +354,7 @@ function Get-LatestCatalogPackage {
         # e.g. keeps the Setup Dynamic Update no newer than the LCU it ships alongside.
         $Filtered = $Filtered | Where-Object { $_.LastUpdated -and ([datetime]$_.LastUpdated) -le $NotAfter }
     }
+    if ($DynamicUpdateKind -and $Filtered) { $Filtered = Select-DynamicUpdateEntry -Candidates @($Filtered) -Kind $DynamicUpdateKind }
     if (-not $Filtered) {
         Write-HostTimestamp '  No catalog results matched the expected update type after filtering.' -ForegroundColor Yellow
         return $null

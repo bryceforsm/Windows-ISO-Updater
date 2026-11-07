@@ -3,6 +3,8 @@
 # group is [checkpoint..., LCU]). Groups are applied independently with the documented sole-target method.
 $UpdateGroups = New-Object System.Collections.Generic.List[object]
 $SafeOsGroup = $null
+# The groups that are a servicing stack update, which go in ahead of the rest and are labelled as such.
+$script:ServicingStackFiles = New-Object System.Collections.Generic.List[string]
 $script:SetupDu = $null
 # The Safe OS KB and the builds it delivers, shared so the per-edition WinRE check asks the support page once.
 $script:SafeOsKb = $null
@@ -26,7 +28,18 @@ elseif ($UpdatePath) {
     # Treat the supplied files as one group ordered by KB ascending, so the latest (target) is applied last
     # and any prior checkpoints are staged alongside it.
     $OrderedUserFiles = @($script:UpdateFiles | Sort-Object { if ((Split-Path -Leaf $_) -match '(?i)kb(\d{6,})') { [int]$Matches[1] } else { 0 } })
-    $UpdateGroups.Add($OrderedUserFiles)
+    # A standalone servicing stack update usually has the lower KB, so in the group it would only be staged
+    # beside the target and never applied. It goes in on its own, first.
+    $UserRest = @()
+    foreach ($File in $OrderedUserFiles) {
+        if (Test-StandaloneServicingStack -Path $File -WorkDir $WorkRoot) {
+            Write-HostTimestamp "  $(Split-Path -Leaf $File) is a servicing stack update, so it is applied on its own before the others." -ForegroundColor Green
+            $UpdateGroups.Add(@($File))
+            $script:ServicingStackFiles.Add($File)
+        }
+        else { $UserRest += $File }
+    }
+    if ($UserRest.Count -gt 0) { $UpdateGroups.Add($UserRest) }
     Write-Host $LineBreak
 }
 else {
@@ -50,20 +63,26 @@ else {
         # cumulative updates and exclude the .NET / Dynamic Update entries the same query returns. The
         # optional "Preview" word has to be allowed through here, because whether a preview is acceptable
         # is -IncludePreview's decision to make, not this pattern's.
+        $script:LcuCutoff = Get-OfflineLcuCutoff -Build $ImageBuild
         $Query = "Cumulative Update for $(Get-CatalogProductQuery -FeatureUpdate $FeatureName) for $CatalogArch-based Systems"
         $Include = '(?i)cumulative update (preview )?for (windows|microsoft server operating system)'
-        $Exclude = '(?i)\.net|dynamic update'
+        $Exclude = Get-LcuTitleExclude
         $script:LcuUpToDate = $null
         $script:LcuSkippedBaselineOnly = $false
         $script:LcuReapplied = $false
         $script:LcuReleaseDate = $null
-        $script:Lcu = Get-LatestCatalogPackage -Query $Query -DownloadDir $DlDir -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview -CurrentBuild $ImageBuild -CurrentUbr $ImageUbr -VerifyWimPath $InstallWimExtracted -VerifyPatchLevel:$VerifyPatchLevel -Reapply:$ReapplyUpdates -AlreadyCurrent ([ref]$script:LcuUpToDate) -BaselineOnly:$BaselineOnly -SelectedDate ([ref]$script:LcuReleaseDate)
+        $Cap = @{}
+        if ($script:LcuCutoff) {
+            $Cap.NotAfter = $script:LcuCutoff
+            Write-HostTimestamp "  Build $ImageBuild cumulative updates released after $($script:LcuCutoff.ToString('MMMM yyyy', [System.Globalization.CultureInfo]::InvariantCulture)) carry an Extended Security Updates step that refuses to run on an offline image, so the newest one before that is used. Windows installs the later ones after setup." -ForegroundColor DarkGray
+        }
+        $script:Lcu = Get-LatestCatalogPackage -Query $Query -DownloadDir $DlDir -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview -CurrentBuild $ImageBuild -CurrentUbr $ImageUbr -VerifyWimPath $InstallWimExtracted -VerifyPatchLevel:$VerifyPatchLevel -Reapply:$ReapplyUpdates -AlreadyCurrent ([ref]$script:LcuUpToDate) -BaselineOnly:$BaselineOnly -SelectedDate ([ref]$script:LcuReleaseDate) @Cap
         if (-not $script:Lcu -and -not $script:LcuUpToDate -and -not $script:EffectiveServer) {
             # Retry with a looser query (some releases omit the "Version xxHx" token in the title). Server
             # media is excluded because its product name without the version matches every Server release.
             $Query2 = "Cumulative Update for $(Get-CatalogProductQuery) for $CatalogArch-based Systems"
             Write-HostTimestamp "  Retrying with a broader query: $Query2" -ForegroundColor Yellow
-            $script:Lcu = Get-LatestCatalogPackage -Query $Query2 -DownloadDir $DlDir -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview -CurrentBuild $ImageBuild -CurrentUbr $ImageUbr -VerifyWimPath $InstallWimExtracted -VerifyPatchLevel:$VerifyPatchLevel -Reapply:$ReapplyUpdates -AlreadyCurrent ([ref]$script:LcuUpToDate) -BaselineOnly:$BaselineOnly -SelectedDate ([ref]$script:LcuReleaseDate)
+            $script:Lcu = Get-LatestCatalogPackage -Query $Query2 -DownloadDir $DlDir -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview -CurrentBuild $ImageBuild -CurrentUbr $ImageUbr -VerifyWimPath $InstallWimExtracted -VerifyPatchLevel:$VerifyPatchLevel -Reapply:$ReapplyUpdates -AlreadyCurrent ([ref]$script:LcuUpToDate) -BaselineOnly:$BaselineOnly -SelectedDate ([ref]$script:LcuReleaseDate) @Cap
         }
     }
     if ($script:Lcu) {
@@ -76,7 +95,8 @@ else {
     elseif ($script:LcuUpToDate) {
         # Nothing will change the OS build now, so reuse the build already confirmed by the check.
         if (-not $script:FinalBuildString) { $script:FinalBuildString = $script:LcuUpToDate }
-        Write-HostTimestamp "The image is already fully patched ($script:LcuUpToDate), so no cumulative update is needed." -ForegroundColor Green
+        $Patched = if ($script:LcuCutoff) { 'as far as an offline update can take it' } else { 'fully patched' }
+        Write-HostTimestamp "The image is already $Patched ($script:LcuUpToDate), so no cumulative update is needed." -ForegroundColor Green
         Add-ServicingResult -Image 'install.wim, boot.wim, winre.wim and the media sources folder' -Package 'Cumulative, .NET, Setup and Safe OS Dynamic Updates' -Result 'Skipped' -Detail "The media is already at $script:LcuUpToDate, so it is left as it shipped"
         Write-HostTimestamp '  The .NET update, both Dynamic Updates and boot.wim are left exactly as the media shipped them, so its Setup files stay matched to its images. Use -ReapplyUpdates to integrate everything anyway.' -ForegroundColor DarkGray
         Write-Host $LineBreak
@@ -96,7 +116,9 @@ else {
             $Query = "Cumulative Update for .NET Framework $(Get-CatalogProductQuery -FeatureUpdate $FeatureName) for $CatalogArch"
             $script:DotNet = Get-LatestCatalogPackage -Query $Query -DownloadDir $DlDir -TitleInclude '(?i)\.net framework' -TitleExclude '(?i)dynamic update' -AllowPreview:$IncludePreview
         }
-        if ($script:DotNet) { $UpdateGroups.Add(@($script:DotNet)) }
+        # One group each, because the packages are for different .NET versions (4.8 and 4.8.1 on Windows 10 and
+        # Server 2022), not a checkpoint chain. Grouped, only the last one reached DISM.
+        if ($script:DotNet) { foreach ($Package in @($script:DotNet)) { $UpdateGroups.Add(@($Package)) } }
         else {
             Write-HostTimestamp '  No .NET cumulative update was integrated (none found).' -ForegroundColor Yellow
             Write-Host $LineBreak
@@ -110,19 +132,17 @@ else {
         Invoke-Task -Description 'Downloading the latest Setup Dynamic Update from the Microsoft Update Catalog...' -ScriptBlock {
             # Bounded by the LCU's own release date, since a DU published after it can carry Setup logic
             # the LCU's servicing stack does not yet expect.
-            $SetupDuArgs = @{
-                Query        = "Setup Dynamic Update $(Get-CatalogProductQuery -FeatureUpdate $FeatureName) $CatalogArch"
-                DownloadDir  = $DlDir
-                TitleInclude = '(?i)setup dynamic update'
-                AllowPreview = $IncludePreview
-            }
+            $SetupDuArgs = Get-DynamicUpdateSearch -Product (Get-CatalogProductQuery -FeatureUpdate $FeatureName) -CatalogArch $CatalogArch
+            $SetupDuArgs.DownloadDir = $DlDir
+            $SetupDuArgs.DynamicUpdateKind = 'Setup'
+            $SetupDuArgs.AllowPreview = $IncludePreview
             if ($script:LcuReleaseDate) { $SetupDuArgs.NotAfter = $script:LcuReleaseDate }
             $script:SetupDu = Get-LatestCatalogPackage @SetupDuArgs
         }
         if (-not $script:SetupDu) {
             Write-HostTimestamp '  No Setup Dynamic Update was found. The media Setup files will only be refreshed from boot.wim, which can make Windows Setup fail on the finished ISO.' -ForegroundColor Yellow
             if ($script:EffectiveServer) {
-                Write-HostTimestamp '  Microsoft only publishes one for Server 2025 and newer, so this is expected on older Server media.' -ForegroundColor DarkGray
+                Write-HostTimestamp '  Microsoft does not publish one for every Server release, so this can be expected on older Server media.' -ForegroundColor DarkGray
             }
             Write-Host $LineBreak
         }
@@ -130,18 +150,14 @@ else {
 
     if (-not $SkipWinRE -and -not $script:LcuUpToDate) {
         Invoke-Task -Description 'Looking for a Safe OS Dynamic Update for the recovery image (WinRE)...' -ScriptBlock {
-            # Server media labels the Safe OS package plain "Dynamic Update", so the Setup one is excluded
-            # by name instead of the Safe OS one being required by name.
-            $SafeInclude = if ($script:EffectiveServer) { '(?i)dynamic update' } else { '(?i)safe os dynamic update' }
+            # Windows 10 and Server title both kinds plain "Dynamic Update", so the kind is read off each
+            # candidate's KB page (see Get-DynamicUpdateKind) rather than its title.
             # Bounded by the LCU's release date for the same reason the Setup DU is: a Safe OS package
             # published later targets a servicing stack this month's LCU has not put in the image yet.
-            $SafeOsArgs = @{
-                Query        = "Safe OS Dynamic Update $(Get-CatalogProductQuery -FeatureUpdate $FeatureName) $CatalogArch"
-                DownloadDir  = $DlDir
-                TitleInclude = $SafeInclude
-                TitleExclude = '(?i)setup dynamic update'
-                AllowPreview = $IncludePreview
-            }
+            $SafeOsArgs = Get-DynamicUpdateSearch -Product (Get-CatalogProductQuery -FeatureUpdate $FeatureName) -CatalogArch $CatalogArch
+            $SafeOsArgs.DownloadDir = $DlDir
+            $SafeOsArgs.DynamicUpdateKind = 'SafeOS'
+            $SafeOsArgs.AllowPreview = $IncludePreview
             if ($script:LcuReleaseDate) { $SafeOsArgs.NotAfter = $script:LcuReleaseDate }
             $script:SafeOs = Get-LatestCatalogPackage @SafeOsArgs
         }
@@ -167,6 +183,29 @@ if ($script:SetupDu) { $script:StampUpdateFiles += @($script:SetupDu) }
 if ($SafeOsGroup) { $script:StampUpdateFiles += @($SafeOsGroup) }
 # Hashed here, once, because both the media tattoo and the build stamp describe the same packages.
 $script:UpdateFileRecords = @(Get-UpdateFileRecords -Paths $script:StampUpdateFiles -DownloadDir $DlDir)
+
+# The servicing stack bundled in a combined update goes in ahead of everything, rather than only after a
+# 0x800F0823, because the attempt that discovers an out-of-date stack can leave the image unserviceable.
+# Extracted once here instead of once per image, and after the stamp, because it is part of a file already in it.
+$ServicingStackDir = Join-Path -Path $WorkRoot -ChildPath 'ServicingStack'
+Remove-Item -LiteralPath $ServicingStackDir -Recurse -Force -ErrorAction SilentlyContinue
+$BundledStacks = @()
+foreach ($Group in $UpdateGroups.ToArray()) {
+    $Target = "$(@($Group)[-1])"
+    if ($Target -notmatch '(?i)\.msu$' -or $script:ServicingStackFiles.Contains($Target)) { continue }
+    $Stack = $null
+    try { $Stack = Expand-ServicingStack -PackagePath $Target -Destination (Join-Path -Path $ServicingStackDir -ChildPath ([IO.Path]::GetFileNameWithoutExtension($Target))) }
+    catch { Write-HostTimestamp "Could not extract the servicing stack from $(Split-Path -Leaf $Target): $($_.Exception.Message)" -ForegroundColor Yellow }
+    if ($Stack) {
+        Write-HostTimestamp "$(Split-Path -Leaf $Target) carries servicing stack update $($Stack.Name), which is applied to each image before the updates."
+        $BundledStacks += $Stack.FullName
+    }
+}
+for ($i = $BundledStacks.Count - 1; $i -ge 0; $i--) {
+    $UpdateGroups.Insert(0, @($BundledStacks[$i]))
+    $script:ServicingStackFiles.Add($BundledStacks[$i])
+}
+if ($BundledStacks.Count -gt 0) { Write-Host $LineBreak }
 
 #endregion
 

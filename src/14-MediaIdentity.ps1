@@ -43,6 +43,10 @@ function Get-FeatureUpdateName {
         20348  { '21H2'; break }   # Windows Server 2022
         19045  { '22H2'; break }   # Windows 10
         19044  { '21H2'; break }   # Windows 10
+        # 2004, 20H2 and 21H1 share one code base with 21H2 and 22H2 and take the same cumulative update. They
+        # are no longer serviced under their own names, while 21H2 is for as long as LTSC 2021 is supported,
+        # and LTSC 2021 media reports 19041 here even though it identifies itself as 21H2.
+        { $_ -in 19041, 19042, 19043 } { '21H2'; break }
         17763  { '1809'; break }   # Windows Server 2019 / Windows 10 1809
         14393  { '1607'; break }   # Windows Server 2016
         default { $null }
@@ -65,7 +69,8 @@ function Resolve-FeatureUpdateName {
     if ($Build -lt 10240) { return $null }
     if (-not $WimPath -or -not (Test-Path -LiteralPath $WimPath)) { return $null }
 
-    Write-HostTimestamp "  Build $Build is newer than any release this script has a name for, so the image is being asked directly. This takes a few minutes..." -ForegroundColor Yellow
+    # Not "newer", because a build the table skipped can be older than everything in it.
+    Write-HostTimestamp "  Build $Build has no release name in this script's list, so the image is being asked directly. This takes a few minutes..." -ForegroundColor Yellow
     $BuildString = Get-WimBuildViaMount -WimPath $WimPath
     # Get-MountedImageBuild appends the hive's DisplayVersion in brackets, e.g. "10.0.26200.9168 (25H2)".
     if ("$BuildString" -match '\(\s*(\d{2}H\d|\d{4})\s*\)') {

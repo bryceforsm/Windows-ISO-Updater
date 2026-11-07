@@ -129,15 +129,39 @@ A machine installed from a freshly built ISO still shows a few pending items on 
 
 `DISM /Add-Package` only consumes `.msu`/`.cab` packages that bind into the component store by build number, which is exactly what makes a cumulative update integrable and these not. Passing one to `-UpdatePath` fails its `.msu`/`.cab` check.
 
-So they stay a post-install task. Left alone, Windows Update installs them on its own within a day of the machine going online. If you want them handled deterministically, do it from the answer file rather than the media:
+So they stay a post-install task. Left alone, Windows Update installs them on its own within a day of the machine going online. If you want them handled deterministically, do it from the answer file rather than the media. [`Examples/autounattend-update-after-setup.xml`](../Examples/autounattend-update-after-setup.xml) does exactly that once setup has finished: it updates Defender's security intelligence, installs whatever Windows Update still offers, and asks the Store to update its apps ([details](unattended-installs.md#finishing-the-updates-after-setup)). To do parts of it by hand instead:
 
-- Pull Defender's platform and intelligence updates at first logon with the in-box client, which needs no download URL:
+- Pull Defender's platform and intelligence updates with the in-box client, which needs no download URL:
   ```powershell
   & "$env:ProgramFiles\Windows Defender\MpCmdRun.exe" -SignatureUpdate
   ```
 - Stop the removal tool being offered at all, if you consider Defender sufficient, by setting `DontOfferThroughWUAU` to `1` under `HKLM\SOFTWARE\Policies\Microsoft\MRT`.
 
 Neither is worth doing in a gold image before sealing: definitions age out while the image sits in storage, so run them at deployment instead.
+
+## Why Windows 10 Stops at the October 2025 Update
+
+Windows 10 version 2004 to 22H2 (builds 19041 to 19045, which includes LTSC 2021) is capped at the October 2025 cumulative update, KB5066791. Every cumulative update for those builds since November 2025 carries an Extended Security Updates licensing step that runs while the update installs. On an image that is not running it stops straight away, and the DISM log says why on an `Info` line thousands of lines before the errors at the end:
+
+```text
+CSI    ESU: Offline is not supported HRESULT_FROM_WIN32(1625).
+CSI    (F) Failed execution of queue item Installer: Extended Security Updates AI installer ...
+CBS    Failed to perform operation.  [HRESULT = 0x80073713 - ERROR_ADVANCED_INSTALLER_FAILED]
+```
+
+DISM then reports the image can no longer be serviced, so the edition is discarded and ships with no update at all. The refusal is deliberate: ESU validation cannot run against an offline image, and if it could, editing an image's edition in its registry would get around it. That is why the same failure is reported against [NTLite](https://ntlite.com/community/threads/cant-integrate-cumulative-update-windows-10-enterprise-ltsc-2021.5906/) and on [Microsoft Q&A](https://learn.microsoft.com/en-us/answers/questions/5857080/updating-windows-10-21h2-offline-with-december-202), and why the only answer either gives is to install these updates on the running system. Community tools that suppress the check work by getting around Microsoft's licensing, so the script does not use them.
+
+Capping the search is better than finding out by failing. A failed attempt costs the whole update's install time, discards the image, and would fail the same way on any month after October 2025, so retrying month by month would cost hours to arrive at the same update. An October 2025 image is still far ahead of any Windows 10 media Microsoft ships, and the updates after it install once Windows is running.
+
+The cutoff comes from where the failures start in public reports, which an LTSC 2021 build here confirmed, not from a Microsoft statement. It lives in one place, `Get-OfflineLcuCutoff`, and the build stamp check and recovery ISO build use the same date as the download step so all three agree. The catalog only returns its 25 newest results, which no longer reach back to October 2025, so a capped search asks again with the month in front, `2025-10 Cumulative Update for ...`.
+
+If a supplied update or another release fails the same way, the run spots the `ESU: Offline is not supported` line in the package's DISM log and says no ISO can carry that update, instead of blaming the media.
+
+## How the Dynamic Updates Are Told Apart
+
+Windows 11 titles its Dynamic Updates *Setup Dynamic Update* and *Safe OS Dynamic Update*. Windows 10 and Windows Server title both plain *Dynamic Update*, so a filter on the words finds neither, and their sizes cannot be trusted to tell them apart: in July 2025 the Windows 10 Safe OS update was 13 MB and the Setup one 22 MB. Each update's catalog details page does say which it is. Its description reads `ComponentUpdate:` for a Safe OS update and `SetupUpdate:` for a Setup one, which matched the Microsoft support page for every Windows 10 and Server update checked. The script reads those descriptions newest first and stops at the first one of the kind it wants, so it is usually one or two requests, made to the same site the search already uses. The support pages themselves are not used, because support.microsoft.com answers Windows PowerShell 5.1 once and then refuses it.
+
+The catalog search also matches words loosely, so a Windows 10 22H2 query returns the Windows 11 22H2 and Server 21H2 Dynamic Updates too. A result is only taken when its title names the media's own product and architecture.
 
 ## Why Preview Updates Are Left Out
 

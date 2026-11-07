@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
-    Downloads Microsoft Surface driver MSI packages and organises them into the folder structure
-    required by Examples/autounattend-driver-install.xml.
+    Downloads Microsoft Surface driver MSI packages, organised into one folder per model, and installs
+    the ones for the machine it runs on unless -DownloadOnly is given.
 
 .DESCRIPTION
     The script discovers all available Surface driver packages by scraping the Microsoft
@@ -11,7 +11,7 @@
         <OutputPath>\<WMI Model Name>\<filename>.msi
 
     Folder names are the exact strings returned by (Get-CimInstance Win32_ComputerSystem).Model on
-    the target hardware, because Install-ModelDrivers.ps1 in the answer file does a substring match
+    the target hardware, so a later step can match a machine to its folder with a substring match
     against that value.
 
     If a file is already present it is skipped, so re-runs are safe and incremental. BITS is used
@@ -35,7 +35,7 @@
     Suppress detail lines; show only headings and the final summary.
 
 .PARAMETER DownloadOnly
-    Download driver packages without installing anything, for staging into Examples/autounattend-driver-install.xml. Downloads every catalogued model, or only -Models if given, into -OutputPath.
+    Download driver packages without installing anything, for staging on deployment media. Downloads every catalogued model, or only -Models if given, into -OutputPath.
 
 .PARAMETER ProxyUrl
     Proxy server URL to route Surface support page scraping and driver package downloads, including
@@ -71,9 +71,9 @@
     Folder names match the exact string returned by (Get-CimInstance Win32_ComputerSystem).Model on
     the target hardware.
 
-    Place the Drivers\ output under $OEM$\$1\ on your boot media. Windows Setup copies $OEM$\$1\
-    to C:\ before the specialize pass runs, making C:\Drivers\ is populated when Install-ModelDrivers.ps1
-    executes.
+    To stage packages on boot media, place the Drivers\ output under $OEM$\$1\. Windows Setup copies
+    $OEM$\$1\ to C:\ before the specialize pass runs, so C:\Drivers\ is populated for anything that
+    installs from it during or after setup.
 
     Model names and download links are discovered at runtime from
     https://support.microsoft.com/en-us/surface/drivers-firmware/download-drivers-and-firmware-for-surface
@@ -94,7 +94,7 @@ param(
     [Parameter(HelpMessage = 'List available models in the catalog and exit without downloading anything.')]
     [switch]$ListModels,
 
-    [Parameter(HelpMessage = 'Download driver packages without installing anything, for staging into Examples/autounattend-driver-install.xml. Downloads every catalogued model, or only -Models if given, into -OutputPath.')]
+    [Parameter(HelpMessage = 'Download driver packages without installing anything, for staging on deployment media. Downloads every catalogued model, or only -Models if given, into -OutputPath.')]
     [switch]$DownloadOnly,
 
     [Parameter(HelpMessage = 'Suppress detail lines; show only headings and the final summary.')]

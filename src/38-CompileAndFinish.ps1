@@ -95,6 +95,7 @@ Show-WimSizeComparison
 Invoke-Task -Description 'Cleaning up the working extraction folder...' -ScriptBlock {
     try {
         Remove-Item -LiteralPath $ExtractDir -Recurse -Force -ErrorAction Stop
+        Remove-Item -LiteralPath (Join-Path -Path $WorkRoot -ChildPath 'ServicingStack') -Recurse -Force -ErrorAction SilentlyContinue
         Write-HostTimestamp '  Removed the extracted media.' -ForegroundColor Green
     }
     catch {

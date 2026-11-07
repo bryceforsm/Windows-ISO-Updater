@@ -112,7 +112,7 @@ For search and easier navigation, read the documentation at [bryceforsm.github.i
 | 📘 [Usage Guide](docs/usage.md) | Running the tool, JSON profiles, Server and LTSC media, editions, drivers, your own files, speeding up a build |
 | ⚙️ [Command-Line Parameters](docs/parameters.md) | Every parameter and what it does |
 | ⏰ [Scheduled Automation](docs/scheduled-runs.md) | Monthly builds from a scheduled task, build stamps and housekeeping |
-| 🤖 [Unattended Setups](docs/unattended-installs.md) | The example answer files and what each one does |
+| 🤖 [Unattended Setups](docs/unattended-installs.md) | Answer files, and the example that finishes the updates an ISO cannot carry |
 | 🧠 [Architecture and Design Details](docs/design-notes.md) | Why the tool works the way it does |
 | 🔧 [Technical Reference](docs/reference.md) | Each step of a run, the build record, downloads, disk space and logging |
 | 📝 [Change Log](CHANGELOG.md) | What changed in each release |

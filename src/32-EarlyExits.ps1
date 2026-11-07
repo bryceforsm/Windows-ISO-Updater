@@ -114,15 +114,15 @@ if ($RecoveryIsoOnly) {
         else {
             Invoke-Task -Description 'Looking for a Safe OS Dynamic Update for the recovery image...' -ScriptBlock {
                 $Product = Get-CatalogProductQuery -FeatureUpdate $script:RecoveryFeatureName
-                # Bounded by the cumulative update's date as in a full build, so both modes pick the same package.
-                $Lcu = Get-CatalogLatestEntry -Query "Cumulative Update for $Product for $CatalogArch-based Systems" -TitleInclude '(?i)cumulative update (preview )?for (windows|microsoft server operating system)' -TitleExclude '(?i)\.net|dynamic update' -AllowPreview:$IncludePreview
-                $SafeOsArgs = @{
-                    Query        = "Safe OS Dynamic Update $Product $CatalogArch"
-                    DownloadDir  = $DlDir
-                    TitleInclude = if ($script:EffectiveServer) { '(?i)dynamic update' } else { '(?i)safe os dynamic update' }
-                    TitleExclude = '(?i)setup dynamic update'
-                    AllowPreview = $IncludePreview
-                }
+                # Bounded by the cumulative update's date as in a full build, offline cap included, so both modes pick the same package.
+                $Cap = @{}
+                $Cutoff = Get-OfflineLcuCutoff -Build $ImageBuild
+                if ($Cutoff) { $Cap.NotAfter = $Cutoff }
+                $Lcu = Get-CatalogLatestEntry -Query "Cumulative Update for $Product for $CatalogArch-based Systems" -TitleInclude '(?i)cumulative update (preview )?for (windows|microsoft server operating system)' -TitleExclude (Get-LcuTitleExclude) -AllowPreview:$IncludePreview @Cap
+                $SafeOsArgs = Get-DynamicUpdateSearch -Product $Product -CatalogArch $CatalogArch
+                $SafeOsArgs.DownloadDir = $DlDir
+                $SafeOsArgs.DynamicUpdateKind = 'SafeOS'
+                $SafeOsArgs.AllowPreview = $IncludePreview
                 if ($Lcu -and $Lcu.LastUpdated) { $SafeOsArgs.NotAfter = $Lcu.LastUpdated }
                 $script:SafeOs = Get-LatestCatalogPackage @SafeOsArgs
                 if (-not $script:SafeOs) {
@@ -138,7 +138,9 @@ if ($RecoveryIsoOnly) {
                     Reset-MountDirectory -Path $WinReMount -ImagePath $script:RecoveryWinRe
                     try {
                         Mount-WindowsImage -ImagePath $script:RecoveryWinRe -Index 1 -Path $WinReMount -ErrorAction Stop | Out-Null
+                        $script:ImageUnserviceable = $false
                         Add-UpdateGroup -MountDir $WinReMount -Group @($script:SafeOs) -Label 'Safe OS Dynamic Update' | Out-Null
+                        if ($script:ImageUnserviceable) { throw 'DISM reports the recovery image can no longer be serviced, so it was discarded' }
                         Write-HostTimestamp '      Cleaning up the recovery image component store (/StartComponentCleanup /ResetBase)...'
                         Invoke-Dism -ArgumentList "/Image:$WinReMount", '/Cleanup-Image', '/StartComponentCleanup', '/ResetBase' | Out-Null
                         New-Item -ItemType Directory -Path $RecoveryBootManagers -Force -ErrorAction Stop | Out-Null
@@ -222,11 +224,11 @@ if (-not $NoStamp) {
             $StampArch    = "$($script:PreviousStamp.Image.CatalogArch)"
             # Same correction as below, taken from the last stamp's recorded build instead of a mount,
             # since that is the whole point of this pre-extraction check.
+            $StampBuild = if ($script:PreviousStamp.Image.Build) { [int]$script:PreviousStamp.Image.Build } else { 0 }
             if (-not $script:EffectiveServer) {
-                $StampBuild = if ($script:PreviousStamp.Image.Build) { [int]$script:PreviousStamp.Image.Build } else { 0 }
                 $script:EffectiveWindowsVersion = if ($StampBuild -ge 22000) { '11' } elseif ($StampBuild -gt 0) { '10' } else { $WindowsVersion }
             }
-            $script:ExpectedUpdateSet = Get-ExpectedUpdateSet -FeatureName $StampFeature -CatalogArch $StampArch
+            $script:ExpectedUpdateSet = Get-ExpectedUpdateSet -FeatureName $StampFeature -CatalogArch $StampArch -Build $StampBuild
             $script:ExpectedUpdateFor = "$StampFeature|$StampArch"
 
             # Says out loud that the catalog really was queried - a run that finishes in a second

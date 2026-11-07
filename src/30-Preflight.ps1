@@ -170,11 +170,12 @@ if (-not $HaveRunMutex) {
 Clear-StaleDefenderExclusion
 
 # Add-UpdateGroup stages each package in its own pkgstage_* folder, the serviced recovery image waits in
-# WinRECache, and -RecoveryIsoPath assembles its media in RecoveryMedia. All are deleted when the step that
+# WinRECache, -RecoveryIsoPath assembles its media in RecoveryMedia, and a servicing stack pulled out of an
+# update waits in ServicingStack (or ssucheck_* while a package is being identified). All are deleted when the step that
 # made them finishes, but a run that was killed outright never reaches that and leaves several GB behind.
 # Cleared before the free space check so the reading reflects what is really available.
 $StaleStages = @(Get-ChildItem -LiteralPath $WorkRoot -Directory -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -like 'pkgstage_*' -or $_.Name -in 'WinRECache', 'RecoveryMedia' })
+    Where-Object { $_.Name -like 'pkgstage_*' -or $_.Name -like 'ssucheck_*' -or $_.Name -in 'WinRECache', 'RecoveryMedia', 'ServicingStack' })
 if ($StaleStages.Count -gt 0) {
     $StageFreedMB = 0
     $StageRemoved = 0

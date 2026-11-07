@@ -375,9 +375,10 @@ function Get-CatalogLatestEntry {
         [string]$TitleExclude,
         [switch]$AllowPreview,
         [switch]$BaselineOnly,
-        [datetime]$NotAfter      # optional upper bound - packages released after this date are excluded
+        [datetime]$NotAfter,     # optional upper bound - packages released after this date are excluded
+        [ValidateSet('SafeOS', 'Setup')][string]$DynamicUpdateKind  # keep only this kind of Dynamic Update
     )
-    $Results = Search-UpdateCatalog -Query $Query
+    $Results = Search-UpdateCatalogUpTo -Query $Query -NotAfter $(if ($PSBoundParameters.ContainsKey('NotAfter')) { $NotAfter })
     if (-not $Results -or $Results.Count -eq 0) { return $null }
     $Filtered = $Results
     if ($TitleInclude) { $Filtered = $Filtered | Where-Object { $_.Title -match $TitleInclude } }
@@ -386,6 +387,7 @@ function Get-CatalogLatestEntry {
     if ($PSBoundParameters.ContainsKey('NotAfter')) {
         $Filtered = $Filtered | Where-Object { $_.LastUpdated -and ([datetime]$_.LastUpdated) -le $NotAfter }
     }
+    if ($DynamicUpdateKind -and $Filtered) { $Filtered = Select-DynamicUpdateEntry -Candidates @($Filtered) -Kind $DynamicUpdateKind }
     if ($BaselineOnly -and $Filtered) { $Filtered = Select-HotpatchBaselineEntry -Query $Query -Candidates @($Filtered) -TitleInclude $TitleInclude -TitleExclude $TitleExclude }
     if (-not $Filtered) { return $null }
     return ($Filtered |
@@ -410,7 +412,8 @@ function Get-CatalogEntryTag {
 function Get-ExpectedUpdateSet {
     param(
         [string]$FeatureName,
-        [string]$CatalogArch
+        [string]$CatalogArch,
+        [int]$Build              # the image's OS build, for the same offline cap the download step applies
     )
 
     if ($SkipUpdates) { return @('None') }
@@ -426,14 +429,17 @@ function Get-ExpectedUpdateSet {
 
     $Product = Get-CatalogProductQuery -FeatureUpdate $FeatureName
     $Include = '(?i)cumulative update (preview )?for (windows|microsoft server operating system)'
-    $Exclude = '(?i)\.net|dynamic update'
+    $Exclude = Get-LcuTitleExclude
     $Set = New-Object System.Collections.Generic.List[string]
     $script:CatalogTitles = @{}
 
-    # Same queries (including the broader fallback) the download step uses, so the two always agree.
-    $Lcu = Get-CatalogLatestEntry -Query "Cumulative Update for $Product for $CatalogArch-based Systems" -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview -BaselineOnly:$BaselineOnly
+    # Same queries (including the broader fallback) and offline cap the download step uses, so the two always agree.
+    $Cap = @{}
+    $Cutoff = Get-OfflineLcuCutoff -Build $Build
+    if ($Cutoff) { $Cap.NotAfter = $Cutoff }
+    $Lcu = Get-CatalogLatestEntry -Query "Cumulative Update for $Product for $CatalogArch-based Systems" -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview -BaselineOnly:$BaselineOnly @Cap
     if (-not $Lcu -and -not $script:EffectiveServer) {
-        $Lcu = Get-CatalogLatestEntry -Query "Cumulative Update for $(Get-CatalogProductQuery) for $CatalogArch-based Systems" -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview -BaselineOnly:$BaselineOnly
+        $Lcu = Get-CatalogLatestEntry -Query "Cumulative Update for $(Get-CatalogProductQuery) for $CatalogArch-based Systems" -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview -BaselineOnly:$BaselineOnly @Cap
     }
     if (-not $Lcu) { return $null }
     $script:CatalogTitles['LCU'] = $Lcu.Title
@@ -447,18 +453,20 @@ function Get-ExpectedUpdateSet {
     if (-not $SkipSetupDU) {
         # Bounds the Setup Dynamic Update by the LCU's own date so a stamp comparison always agrees with
         # what the download step would actually pick (see Get-LatestCatalogPackage's -NotAfter).
-        $SetupDuArgs = @{ Query = "Setup Dynamic Update $Product $CatalogArch"; TitleInclude = '(?i)setup dynamic update'; AllowPreview = $IncludePreview }
+        $SetupDuArgs = Get-DynamicUpdateSearch -Product $Product -CatalogArch $CatalogArch
+        $SetupDuArgs.DynamicUpdateKind = 'Setup'
+        $SetupDuArgs.AllowPreview = $IncludePreview
         if ($Lcu.LastUpdated) { $SetupDuArgs.NotAfter = $Lcu.LastUpdated }
         $SetupDu = Get-CatalogLatestEntry @SetupDuArgs
         $Set.Add("SetupDU=$(Get-CatalogEntryTag -Entry $SetupDu)")
         if ($SetupDu) { $script:CatalogTitles['SetupDU'] = $SetupDu.Title }
     }
     if (-not $SkipWinRE) {
-        # Server media labels the Safe OS package plain "Dynamic Update", so the Setup one is excluded by
-        # name instead of the Safe OS one being required by name. Bounded by the LCU's date for the same
+        # The same search and kind check the download step uses, bounded by the LCU's date for the same
         # reason the Setup DU is, so a stamp comparison agrees with what the download step would pick.
-        $SafeInclude = if ($script:EffectiveServer) { '(?i)dynamic update' } else { '(?i)safe os dynamic update' }
-        $SafeOsArgs = @{ Query = "Safe OS Dynamic Update $Product $CatalogArch"; TitleInclude = $SafeInclude; TitleExclude = '(?i)setup dynamic update'; AllowPreview = $IncludePreview }
+        $SafeOsArgs = Get-DynamicUpdateSearch -Product $Product -CatalogArch $CatalogArch
+        $SafeOsArgs.DynamicUpdateKind = 'SafeOS'
+        $SafeOsArgs.AllowPreview = $IncludePreview
         if ($Lcu.LastUpdated) { $SafeOsArgs.NotAfter = $Lcu.LastUpdated }
         $SafeOs = Get-CatalogLatestEntry @SafeOsArgs
         $Set.Add("SafeOS=$(Get-CatalogEntryTag -Entry $SafeOs)")

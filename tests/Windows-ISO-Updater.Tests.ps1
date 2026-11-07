@@ -4,9 +4,9 @@ BeforeAll {
     $ScriptFile = Join-Path -Path $PSScriptRoot -ChildPath '..\Windows-ISO-Updater.ps1'
     $Ast = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path -LiteralPath $ScriptFile).Path, [ref]$null, [ref]$null)
     $Names = @(
-        'ConvertFrom-HotpatchCalendar', 'Read-ConfigFile', 'Format-ShortHash', 'Get-BuildParameterHash', 'Get-DefaultIsoName', 'Get-EditionRank', 'Get-EditionShortName',
-        'Get-DismErrorCode', 'Get-DismErrorMeaning', 'Get-DismLogError', 'Get-DismMessage', 'Save-DismLog',
-        'Format-ByteProgress', 'Format-Duration', 'Format-ProgressLine', 'Format-WrappedText', 'Get-DismPercent', 'Get-FileDownload', 'Get-RobocopyPercent', 'Test-BitsUsable', 'Test-PathInList', 'Get-WinHttpProxy', 'Test-VirtualMachineModel', 'Format-Gigabytes', 'Format-Uptime', 'Get-HotpatchBaselineKb', 'Get-PatchTuesdayStart', 'Get-ScheduledTaskArgumentString', 'Get-ScriptCommandLine', 'Get-TextSha256',
+        'ConvertFrom-HotpatchCalendar', 'Read-ConfigFile', 'Format-ShortHash', 'Get-BuildParameterHash', 'Get-DefaultIsoName', 'Get-EditionRank', 'Get-EditionShortName', 'Get-FeatureUpdateName',
+        'Get-DismErrorCode', 'Get-DismErrorMeaning', 'Get-DismLogError', 'Get-DismMessage', 'Save-DismLog', 'Format-ExitCode', 'Test-DismImageUnserviceable', 'Test-DismEsuOfflineRefusal', 'Get-OfflineLcuCutoff', 'Get-LcuTitleExclude', 'Search-UpdateCatalogUpTo', 'Get-CatalogLatestEntry', 'Get-DynamicUpdateKind', 'Select-DynamicUpdateEntry', 'Get-DynamicUpdateSearch', 'Get-CabFileList', 'Expand-ServicingStack', 'Test-StandaloneServicingStack',
+        'Format-ByteProgress', 'Format-DismProgressDetail', 'Format-Duration', 'Format-ProgressLine', 'Format-WrappedText', 'Get-DismPercent', 'Get-FileDownload', 'Get-RobocopyPercent', 'Test-BitsUsable', 'Test-PathInList', 'Get-WinHttpProxy', 'Test-VirtualMachineModel', 'Format-Gigabytes', 'Format-Uptime', 'Get-HotpatchBaselineKb', 'Get-PatchTuesdayStart', 'Get-ScheduledTaskArgumentString', 'Get-ScriptCommandLine', 'Get-TextSha256',
         'Resolve-EditionIndexes', 'Search-UpdateCatalog', 'Select-DefaultEditions', 'Select-HotpatchBaselineEntry', 'Test-FidoUrl', 'Test-IsHotpatchBaseline',
         'Test-MicrosoftDownloadUrl', 'Test-RebuildNeeded', 'Test-SameWriteTime', 'Test-UpdatePackageFile'
     )
@@ -192,6 +192,111 @@ Describe 'The hotpatch calendar' {
     }
 }
 
+Describe 'The offline cumulative update cap' {
+    It 'caps build <Build> at October 2025' -TestCases @(
+        @{ Build = 19041 }, @{ Build = 19044 }, @{ Build = 19045 }
+    ) {
+        Get-OfflineLcuCutoff -Build $Build | Should -Be ([datetime]'2025-10-31')
+    }
+
+    It 'leaves build <Build> uncapped' -TestCases @(
+        @{ Build = 0 }, @{ Build = 17763 }, @{ Build = 18363 }, @{ Build = 20348 }, @{ Build = 26100 }
+    ) {
+        Get-OfflineLcuCutoff -Build $Build | Should -BeNullOrEmpty
+    }
+
+    It 'passes over the November 2025 update for capped media' {
+        Mock Search-UpdateCatalog {
+            @(
+                [pscustomobject]@{ Title = '2025-10 Cumulative Update for Windows 10 Version 21H2 for x64-based Systems (KB5066791)'; LastUpdated = [datetime]'2025-10-14'; SizeMB = 700; Guid = 'a' }
+                [pscustomobject]@{ Title = '2025-11 Cumulative Update for Windows 10 Version 21H2 for x64-based Systems (KB5068781)'; LastUpdated = [datetime]'2025-11-11'; SizeMB = 700; Guid = 'b' }
+            )
+        }
+        $Entry = Get-CatalogLatestEntry -Query 'Cumulative Update' -NotAfter (Get-OfflineLcuCutoff -Build 19044)
+        $Entry.Title | Should -Match 'KB5066791'
+    }
+
+    It "searches again by month when the catalog's 25 newest results are all past the cap" {
+        Mock Search-UpdateCatalog -ParameterFilter { $Query -notlike '2025-10 *' } {
+            @([pscustomobject]@{ Title = '2026-10 Cumulative Update for Windows 10 Version 21H2 for x64-based Systems (KB5134125)'; LastUpdated = [datetime]'2026-10-26'; SizeMB = 700; Guid = 'new' })
+        }
+        Mock Search-UpdateCatalog -ParameterFilter { $Query -like '2025-10 *' } {
+            @(
+                [pscustomobject]@{ Title = '2025-10 Cumulative Update for Windows 10 Version 21H2 for x64-based Systems (KB5066791)'; LastUpdated = [datetime]'2025-10-14'; SizeMB = 700; Guid = 'oct' }
+                [pscustomobject]@{ Title = '2025-11 Cumulative Update for Windows 10 Version 21H2 for x64-based Systems (KB5068781)'; LastUpdated = [datetime]'2025-11-11'; SizeMB = 700; Guid = 'nov' }
+            )
+        }
+        $Entry = Get-CatalogLatestEntry -Query 'Cumulative Update for Windows 10 Version 21H2 for x64-based Systems' -NotAfter ([datetime]'2025-10-31')
+        $Entry.Title | Should -Match 'KB5066791'
+        Should -Invoke Search-UpdateCatalog -Times 1 -Exactly -ParameterFilter { $Query -eq '2025-10 Cumulative Update for Windows 10 Version 21H2 for x64-based Systems' }
+    }
+
+    It 'does not search again when the results already reach back past the cap' {
+        Mock Search-UpdateCatalog { @([pscustomobject]@{ Title = 'x (KB1)'; LastUpdated = [datetime]'2025-09-09'; SizeMB = 1; Guid = 'sep' }) }
+        @(Search-UpdateCatalogUpTo -Query 'q' -NotAfter ([datetime]'2025-10-31')).Count | Should -Be 1
+        Should -Invoke Search-UpdateCatalog -Times 1 -Exactly
+    }
+
+    It 'keeps the Server and Dynamic Cumulative twins out of a client LCU search' {
+        $script:EffectiveServer = $false
+        $Exclude = Get-LcuTitleExclude
+        '2025-10 Cumulative Update for Microsoft server operating system version 21H2 for x64-based Systems (KB5070884)' | Should -Match $Exclude
+        '2025-10 Dynamic Cumulative Update for Windows 10 Version 21H2 for x64-based Systems (KB5066791)' | Should -Match $Exclude
+        '2025-10 Cumulative Update for Windows 10 Version 21H2 for x64-based Systems (KB5066791)' | Should -Not -Match $Exclude
+        $script:EffectiveServer = $true
+        '2025-10 Cumulative Update for Microsoft server operating system version 21H2 for x64-based Systems (KB5070884)' | Should -Not -Match (Get-LcuTitleExclude)
+        $script:EffectiveServer = $false
+    }
+}
+
+Describe 'Telling the Dynamic Updates apart' {
+    BeforeEach { $script:DynamicUpdateKindCache = @{} }
+
+    It 'takes the kind from a Windows 11 title without reading the KB page' {
+        Mock Invoke-WebRequest { throw 'should not be called' }
+        Get-DynamicUpdateKind -Entry ([pscustomobject]@{ Title = '2026-10 Safe OS Dynamic Update for Windows 11, version 24H2 for x64-based Systems (KB5127654)' }) | Should -Be 'SafeOS'
+        Get-DynamicUpdateKind -Entry ([pscustomobject]@{ Title = '2026-10 Setup Dynamic Update for Windows 11, version 24H2 for x64-based Systems (KB5127650)' }) | Should -Be 'Setup'
+        Should -Invoke Invoke-WebRequest -Times 0 -Exactly
+    }
+
+    It "reads a plain Windows 10 title's kind off its catalog details page, once" {
+        Mock Invoke-WebRequest { [pscustomobject]@{ Content = '<span id="ScopedViewHandler_desc">ComponentUpdate:</span>' } }
+        $Entry = [pscustomobject]@{ Title = '2025-07 Dynamic Update for Windows 10 Version 22H2 for x64-based Systems (KB5062691)'; Guid = 'safe-os' }
+        Get-DynamicUpdateKind -Entry $Entry | Should -Be 'SafeOS'
+        Get-DynamicUpdateKind -Entry $Entry | Should -Be 'SafeOS'
+        Should -Invoke Invoke-WebRequest -Times 1 -Exactly -ParameterFilter { $Uri -like 'https://www.catalog.update.microsoft.com/ScopedViewInline.aspx?updateid=safe-os' }
+    }
+
+    It 'passes over an entry whose catalog details cannot be read or do not say' {
+        Mock Invoke-WebRequest { throw 'unreachable' }
+        Get-DynamicUpdateKind -Entry ([pscustomobject]@{ Title = '2025-07 Dynamic Update for Windows 10 Version 22H2 for x64-based Systems (KB5062682)'; Guid = 'a' }) | Should -BeNullOrEmpty
+        Mock Invoke-WebRequest { [pscustomobject]@{ Content = '<span id="ScopedViewHandler_desc">Something else.</span>' } }
+        Get-DynamicUpdateKind -Entry ([pscustomobject]@{ Title = '2025-07 Dynamic Update for Windows 10 Version 22H2 for x64-based Systems (KB5062682)'; Guid = 'b' }) | Should -BeNullOrEmpty
+    }
+
+    It 'picks the Safe OS update even when it is the smaller one of the month' {
+        Mock Invoke-WebRequest -ParameterFilter { $Uri -like '*=kb5062691' } { [pscustomobject]@{ Content = '<span id="ScopedViewHandler_desc">ComponentUpdate:</span>' } }
+        Mock Invoke-WebRequest -ParameterFilter { $Uri -like '*=kb5062682' } { [pscustomobject]@{ Content = '<span id="ScopedViewHandler_desc">SetupUpdate:</span>' } }
+        $Candidates = @(
+            [pscustomobject]@{ Title = '2025-07 Dynamic Update for Windows 10 Version 22H2 for x64-based Systems (KB5062682)'; LastUpdated = [datetime]'2025-07-08'; SizeMB = 21.6; Guid = 'kb5062682' }
+            [pscustomobject]@{ Title = '2025-07 Dynamic Update for Windows 10 Version 22H2 for x64-based Systems (KB5062691)'; LastUpdated = [datetime]'2025-07-08'; SizeMB = 13.2; Guid = 'kb5062691' }
+        )
+        (Select-DynamicUpdateEntry -Candidates $Candidates -Kind 'SafeOS').Title | Should -Match 'KB5062691'
+        (Select-DynamicUpdateEntry -Candidates $Candidates -Kind 'Setup').Title | Should -Match 'KB5062682'
+    }
+
+    It 'holds the search to the media product and architecture' {
+        $Search = Get-DynamicUpdateSearch -Product 'Windows 10 Version 22H2' -CatalogArch 'x64'
+        $Search.Query | Should -Be 'Dynamic Update Windows 10 Version 22H2 x64'
+        '2025-10 Dynamic Update for Windows 10 Version 22H2 for x64-based Systems (KB5067017)' | Should -Match $Search.TitleInclude
+        '2025-10 Safe OS Dynamic Update for Windows 11 Version 22H2 for x64-based Systems (KB5067019)' | Should -Not -Match $Search.TitleInclude
+        '2025-10 Dynamic Update for Windows 10 Version 22H2 for ARM64-based Systems (KB5067017)' | Should -Not -Match $Search.TitleInclude
+        '2025-10 Dynamic Cumulative Update for Windows 10 Version 22H2 for x64-based Systems (KB5066791)' | Should -Not -Match $Search.TitleInclude
+        '2026-10 Dynamic Update for Microsoft server operating system version 21H2 for x64-based Systems (KB5126667)' | Should -Not -Match $Search.TitleInclude
+        '2026-10 Safe OS Dynamic Update for Windows 11, version 24H2 for x64-based Systems (KB5127654)' | Should -Match (Get-DynamicUpdateSearch -Product 'Windows 11 Version 24H2' -CatalogArch 'x64').TitleInclude
+    }
+}
+
 Describe 'Test-UpdatePackageFile' {
     BeforeAll {
         $script:Sample = Join-Path -Path $TestDrive -ChildPath 'sample.bin'
@@ -331,6 +436,99 @@ Describe 'Reporting a DISM failure' {
 
     It 'returns nothing when the DISM log is missing' {
         @(Get-DismLogError -Path (Join-Path -Path $TestDrive -ChildPath 'missing.log')).Count | Should -Be 0
+    }
+
+    It 'writes a negative exit code as hex and leaves the others alone' {
+        Format-ExitCode -Code -2146498525 | Should -Be '0x800F0823'
+        Format-ExitCode -Code 3010 | Should -Be '3010'
+    }
+
+    It 'spots an image DISM says to discard, from its console output' {
+        $Output = @('The specified image is no longer serviceable and may be corrupted.', 'Discard the modified image and start again.', 'Error: 0x80073713')
+        Test-DismImageUnserviceable -Output $Output | Should -BeTrue
+    }
+
+    It 'spots an image DISM says to discard, from its log alone' {
+        $Log = Join-Path -Path $TestDrive -ChildPath 'discard.log'
+        Set-Content -LiteralPath $Log -Value '2026-11-07 11:42:23, Error                 DISM   DISM Package Manager: PID=4936 TID=9320 Discard this Windows image and try the operation again on a new Windows image. - GetCbsErrorMsg'
+        Test-DismImageUnserviceable -Output @('Error: 0x800f0830') -LogPath $Log | Should -BeTrue
+    }
+
+    It "spots the ESU step refusing an offline image, logged as Info well before DISM's errors" {
+        $Log = Join-Path -Path $TestDrive -ChildPath 'esu.log'
+        Set-Content -LiteralPath $Log -Value @(
+            '2026-11-07 12:47:11, Info                  CSI    00000002 ESU: Offline is not supported HRESULT_FROM_WIN32(1625).'
+            '2026-11-07 12:47:38, Error                 DISM   DISM Package Manager: PID=8452 TID=9036 Discard this Windows image and try the operation again on a new Windows image. - GetCbsErrorMsg'
+        )
+        Test-DismEsuOfflineRefusal -LogPath $Log | Should -BeTrue
+        Test-DismEsuOfflineRefusal -LogPath (Join-Path -Path $TestDrive -ChildPath 'discard.log') | Should -BeFalse
+        Test-DismEsuOfflineRefusal -LogPath (Join-Path -Path $TestDrive -ChildPath 'missing.log') | Should -BeFalse
+    }
+
+    It 'does not treat an ordinary failure as unserviceable' {
+        Test-DismImageUnserviceable -Output $script:DismOutput -LogPath (Join-Path -Path $TestDrive -ChildPath 'missing.log') | Should -BeFalse
+    }
+}
+
+# Real update packages are hundreds of megabytes, so these are built with makecab to the same layout: an .msu is a
+# cabinet of cabinets, and each package cabinet carries an update.mum naming the package.
+Describe 'Servicing stack packages' {
+    BeforeAll {
+        function New-TestCabinet {
+            param([string]$Path, [string[]]$Files)
+            $Ddf = "$Path.ddf"
+            Set-Content -LiteralPath $Ddf -Value (@(
+                    ".Set CabinetNameTemplate=$(Split-Path -Leaf $Path)", ".Set DiskDirectoryTemplate=$(Split-Path -Parent $Path)",
+                    '.Set Cabinet=on', '.Set Compress=on', '.Set RptFileName=nul', '.Set InfFileName=nul'
+                ) + @($Files | ForEach-Object { "`"$_`"" }))
+            makecab.exe /F $Ddf | Out-Null
+            Remove-Item -LiteralPath $Ddf
+        }
+        $script:Pkg = Join-Path -Path $TestDrive -ChildPath 'packages'
+        New-Item -ItemType Directory -Path $script:Pkg | Out-Null
+        $Mum = Join-Path -Path $script:Pkg -ChildPath 'update.mum'
+        Set-Content -LiteralPath (Join-Path $script:Pkg 'WSUSSCAN.cab') -Value 'x'
+
+        Set-Content -LiteralPath $Mum -Value '<assembly><assemblyIdentity name="Package_for_ServicingStack_1161" /></assembly>'
+        New-TestCabinet -Path (Join-Path $script:Pkg 'Windows10.0-KB5005260-x64.cab') -Files $Mum
+        New-TestCabinet -Path (Join-Path $script:Pkg 'windows10.0-kb5005260-x64.msu') -Files (Join-Path $script:Pkg 'Windows10.0-KB5005260-x64.cab'), (Join-Path $script:Pkg 'WSUSSCAN.cab')
+        Copy-Item -LiteralPath (Join-Path $script:Pkg 'Windows10.0-KB5005260-x64.cab') -Destination (Join-Path $script:Pkg 'SSU-19041.7801-x64.cab')
+
+        Set-Content -LiteralPath $Mum -Value '<assembly><assemblyIdentity name="Package_for_RollupFix" /></assembly>'
+        New-TestCabinet -Path (Join-Path $script:Pkg 'Windows10.0-KB5134125-x64.cab') -Files $Mum
+        New-TestCabinet -Path (Join-Path $script:Pkg 'windows10.0-kb5134125-x64.msu') -Files (Join-Path $script:Pkg 'SSU-19041.7801-x64.cab'), (Join-Path $script:Pkg 'Windows10.0-KB5134125-x64.cab'), (Join-Path $script:Pkg 'WSUSSCAN.cab')
+        New-TestCabinet -Path (Join-Path $script:Pkg 'windows10.0-kb5127683-x64-ndp48.msu') -Files (Join-Path $script:Pkg 'Windows10.0-KB5134125-x64.cab')
+    }
+
+    It 'lists the files inside an .msu' {
+        Get-CabFileList -Path (Join-Path $script:Pkg 'windows10.0-kb5134125-x64.msu') | Should -Be @('SSU-19041.7801-x64.cab', 'Windows10.0-KB5134125-x64.cab', 'WSUSSCAN.cab')
+    }
+
+    It 'pulls out only the servicing stack from a combined update' {
+        $Out = Join-Path -Path $TestDrive -ChildPath 'bundled'
+        $Stack = Expand-ServicingStack -PackagePath (Join-Path $script:Pkg 'windows10.0-kb5134125-x64.msu') -Destination $Out
+        $Stack.Name | Should -Be 'SSU-19041.7801-x64.cab'
+        @(Get-ChildItem -LiteralPath $Out).Count | Should -Be 1
+    }
+
+    It 'returns nothing for an update that bundles no servicing stack' {
+        Expand-ServicingStack -PackagePath (Join-Path $script:Pkg 'windows10.0-kb5127683-x64-ndp48.msu') -Destination (Join-Path $TestDrive 'none') | Should -BeNullOrEmpty
+    }
+
+    It 'recognises a standalone servicing stack update as <Name>' -TestCases @(
+        @{ Name = 'windows10.0-kb5005260-x64.msu' }
+        @{ Name = 'SSU-19041.7801-x64.cab' }
+    ) {
+        Test-StandaloneServicingStack -Path (Join-Path $script:Pkg $Name) -WorkDir $TestDrive | Should -BeTrue
+    }
+
+    It 'does not mistake <Name> for one' -TestCases @(
+        @{ Name = 'windows10.0-kb5134125-x64.msu' }
+        @{ Name = 'Windows10.0-KB5134125-x64.cab' }
+        @{ Name = 'windows10.0-kb5127683-x64-ndp48.msu' }
+    ) {
+        Test-StandaloneServicingStack -Path (Join-Path $script:Pkg $Name) -WorkDir $TestDrive | Should -BeFalse
+        @(Get-ChildItem -LiteralPath $TestDrive -Directory -Filter 'ssucheck_*').Count | Should -Be 0
     }
 
     It 'saves a failed package''s log under the KB and the image' {
@@ -627,6 +825,41 @@ Describe 'Resolve-EditionIndexes' {
         $Unmatched = $null
         Resolve-EditionIndexes -Images $script:Images -Tokens 'Home,Ultimate' -Unmatched ([ref]$Unmatched) | Should -Be @(1)
         @($Unmatched) | Should -Be @('Ultimate')
+    }
+}
+
+Describe 'Format-DismProgressDetail' {
+    It 'says it is working before DISM shows a percentage' {
+        Format-DismProgressDetail -Percent -1 -Elapsed ([TimeSpan]::FromSeconds(12.7)) -Unchanged 0 | Should -Be 'Working (12.0s)'
+    }
+
+    It 'shows only the time while the percentage is moving' {
+        Format-DismProgressDetail -Percent 40 -Elapsed ([TimeSpan]::FromSeconds(95)) -Unchanged ([TimeSpan]::FromSeconds(20)) | Should -Be '1m 35s'
+    }
+
+    It 'calls out a percentage that has not moved for a minute' {
+        Format-DismProgressDetail -Percent 40 -Elapsed ([TimeSpan]::FromSeconds(400)) -Unchanged ([TimeSpan]::FromSeconds(185.4)) | Should -Be '6m 40s, still working (no change for 3m 05s)'
+    }
+
+    It 'does not round the hours of a long step up' {
+        Format-Duration ([TimeSpan]::FromMinutes(96)) | Should -Be '1h 36m 00s'
+    }
+}
+
+Describe 'Get-FeatureUpdateName' {
+    It 'names build <Build> as <Name>' -TestCases @(
+        @{ Build = 26100; Name = '24H2' }
+        @{ Build = 19045; Name = '22H2' }
+        @{ Build = 19044; Name = '21H2' }
+        @{ Build = 19041; Name = '21H2' }
+        @{ Build = 19042; Name = '21H2' }
+        @{ Build = 19043; Name = '21H2' }
+    ) {
+        Get-FeatureUpdateName -Build $Build | Should -Be $Name
+    }
+
+    It 'returns nothing for a build it does not know' {
+        Get-FeatureUpdateName -Build 18363 | Should -BeNullOrEmpty
     }
 }
 
