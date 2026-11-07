@@ -6,7 +6,7 @@ BeforeAll {
     $Names = @(
         'ConvertFrom-HotpatchCalendar', 'Read-ConfigFile', 'Format-ShortHash', 'Get-BuildParameterHash', 'Get-DefaultIsoName', 'Get-EditionRank', 'Get-EditionShortName',
         'Get-DismErrorCode', 'Get-DismErrorMeaning', 'Get-DismLogError', 'Get-DismMessage', 'Save-DismLog',
-        'Format-ByteProgress', 'Format-Duration', 'Format-ProgressLine', 'Format-WrappedText', 'Get-DismPercent', 'Get-FileDownload', 'Get-RobocopyPercent', 'Test-BitsUsable', 'Get-HotpatchBaselineKb', 'Get-PatchTuesdayStart', 'Get-ScheduledTaskArgumentString', 'Get-ScriptCommandLine', 'Get-TextSha256',
+        'Format-ByteProgress', 'Format-Duration', 'Format-ProgressLine', 'Format-WrappedText', 'Get-DismPercent', 'Get-FileDownload', 'Get-RobocopyPercent', 'Test-BitsUsable', 'Test-PathInList', 'Get-HotpatchBaselineKb', 'Get-PatchTuesdayStart', 'Get-ScheduledTaskArgumentString', 'Get-ScriptCommandLine', 'Get-TextSha256',
         'Resolve-EditionIndexes', 'Search-UpdateCatalog', 'Select-DefaultEditions', 'Select-HotpatchBaselineEntry', 'Test-FidoUrl', 'Test-IsHotpatchBaseline',
         'Test-MicrosoftDownloadUrl', 'Test-RebuildNeeded', 'Test-SameWriteTime', 'Test-UpdatePackageFile'
     )
@@ -372,6 +372,20 @@ Describe 'Get-DismPercent' {
         @{ Line = '' }
     ) {
         Get-DismPercent -Line $Line | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Test-PathInList' {
+    It 'finds the working folder whatever its case or trailing backslash' {
+        Test-PathInList -List @('D:\Other', 'c:\wiso-work\') -Path 'C:\WISO-Work' | Should -BeTrue
+    }
+
+    It 'does not take a folder whose name only starts the same' {
+        Test-PathInList -List @('C:\WISO-Work2', 'C:\WISO-Work\Mount') -Path 'C:\WISO-Work' | Should -BeFalse
+    }
+
+    It 'copes with an empty exclusion list' {
+        Test-PathInList -List $null -Path 'C:\WISO-Work' | Should -BeFalse
     }
 }
 

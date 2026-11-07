@@ -1,6 +1,13 @@
 
 $WimCompression = if ($FastCompression) { 'Fast' } else { 'Max' }
 
+# Added here, at the first heavy disk work, rather than at startup, so a run that stops early (nothing has
+# changed, -CheckOnly, -ListEditions) never changes Defender's settings at all.
+if ($ExcludeWorkPathFromDefender) {
+    Add-WorkPathDefenderExclusion -Path $WorkRoot
+    Write-Host $LineBreak
+}
+
 #region Extract the ISO to the working folder
 $MountedImage = $null
 try {

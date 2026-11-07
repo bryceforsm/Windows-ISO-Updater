@@ -238,6 +238,38 @@ Every kept edition is serviced by default, so a two-edition build takes roughly 
 
 `-KeepEditions` accepts edition names (partial matches allowed) or index numbers, and overrides the default. Only the kept editions are serviced and re-exported, so the removed editions are gone from the final `install.wim`. If none of your values match any edition in the ISO, all editions are kept instead (the script prints a warning and lists the available editions). A partial mismatch (some values match, some don't) exits with error 1. It works with `-SkipUpdates` too, if you only want to trim editions without integrating updates.
 
+## Speeding Up a Build
+
+DISM has no setting that makes it faster, but most of a build's time goes on things you can choose. In order of how much they usually save:
+
+1. **Keep fewer editions.** Each edition is serviced separately, so the time grows with how many you keep. `-KeepEditions "Windows 11 Pro"` services one instead of three ([Removing Editions](#removing-editions-slimming-the-iso)).
+2. **Put the working folder on a fast local SSD.** DISM is mostly limited by the disk, so `-WorkPath` on an NVMe drive is much quicker than on a SATA SSD or a hard disk. Never use a network share or a cloud-synced folder, which the script warns about.
+3. **Exclude the working folder from Defender** with `-ExcludeWorkPathFromDefender`. Defender otherwise scans every file DISM writes into a mounted image, and an image holds hundreds of thousands of them, which slows applying updates, the cleanup and the commit.
+4. **Use `-FastCompression`.** Exports are much quicker, for an `install.wim` typically 5-15% bigger.
+5. **Skip what you do not need.** `-SkipDotNet` leaves out the .NET update, and `-SkipWinRE` leaves the recovery image as the media shipped it. Each saves a whole servicing pass.
+
+```bat
+:: A quick build of one edition, for testing
+.\Run-Windows-ISO-Updater.bat -KeepEditions "Windows 11 Pro" -FastCompression -ExcludeWorkPathFromDefender
+```
+
+### How the Defender exclusion works
+
+`-ExcludeWorkPathFromDefender` is the one speed option that changes the machine rather than the build, so it is off unless you ask for it.
+
+- The working folder (`C:\WISO-Work` by default, or your `-WorkPath`) is added to Defender's exclusions when the build starts its heavy work, after the checks that can end a run early. A run that finds nothing has changed never touches Defender.
+- It is **removed when the run ends, however it ends.** A normal finish removes it before the window waits for Enter. For an error, Ctrl+C or a closed window, a small hidden process started with the exclusion waits for the run to end and removes it then.
+- If a restart or power cut ends the run, the next run removes the leftover exclusion before it does anything else, whether or not it uses the switch. It knows the exclusion is its own to remove from `DefenderExclusion.json`, a marker in the working folder.
+- An exclusion that was **already on Defender's list** before the run is left exactly as it was.
+- **While it is in place, nothing in the working folder is scanned**, including an ISO or update packages downloaded into it during the run. The update packages are checked against the hash in their catalog file name, or their signature, before they are used, but if you need everything scanned as it arrives, leave the switch off.
+- It does nothing when another antivirus is the active one, because Defender's exclusions then change nothing. Exclude the working folder in that product instead. Where Defender's exclusions are managed by Group Policy or Intune, a local exclusion may not apply, and the script says so and carries on with scanning as usual.
+
+To check that nothing was left behind, list Defender's exclusions in an elevated PowerShell:
+
+```powershell
+(Get-MpPreference).ExclusionPath
+```
+
 ## Adding Drivers
 
 `-DriverPath` points at a folder of driver packages and injects them into the images. The folder is searched **recursively** for `.inf` files, and each one is added to every serviced edition of `install.wim` and to `boot.wim` index 2.

@@ -26,7 +26,7 @@ if ($RecoveryIsoOnly) {
         exit 1
     }
     $RecoveryIgnored = @('Edition', 'KeepEditions', 'KeepAllEditions', 'UpdatePath', 'SkipDotNet', 'SkipSetupDU', 'BaselineOnly',
-        'VerifyPatchLevel', 'CompressEsd', 'FastCompression', 'UnattendPath', 'DriverPath', 'AllowUnsignedDrivers', 'ExtraFilesPath',
+        'VerifyPatchLevel', 'CompressEsd', 'FastCompression', 'ExcludeWorkPathFromDefender', 'UnattendPath', 'DriverPath', 'AllowUnsignedDrivers', 'ExtraFilesPath',
         'SkipTattoo', 'AnonymousTattoo', 'StripImageResidue', 'VolumeLabel', 'IsoNamePrefix', 'IsoNameSuffix', 'Force', 'NoStamp', 'StampPath') |
         Where-Object { $script:ScriptBoundParameters.ContainsKey($_) -or $script:ProfileValues.Contains($_) }
     if ($RecoveryIgnored) {
@@ -160,6 +160,9 @@ if (-not $HaveRunMutex) {
 #endregion
 
 #region Clean up leftovers from an interrupted run
+# Runs whether or not this run asks for an exclusion, because a stale one should not outlive the run that made it.
+Clear-StaleDefenderExclusion
+
 # Add-UpdateGroup stages each package in its own pkgstage_* folder, the serviced recovery image waits in
 # WinRECache, and -RecoveryIsoPath assembles its media in RecoveryMedia. All are deleted when the step that
 # made them finishes, but a run that was killed outright never reaches that and leaves several GB behind.

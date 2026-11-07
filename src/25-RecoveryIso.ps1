@@ -114,5 +114,4 @@ function Remove-StaleRecoveryIso {
     return [pscustomobject]@{ Removed = $Removed; FreedMB = $FreedMB }
 }
 #endregion
-#endregion
 

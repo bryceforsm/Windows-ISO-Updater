@@ -4,6 +4,10 @@ What changed in each release. Versions are dates, `yyyy.MM.dd.<revision>`. Relea
 
 ## [Unreleased]
 
+### Added
+
+- `-ExcludeWorkPathFromDefender` excludes the working folder from Microsoft Defender real-time scanning while the build runs, which speeds up applying updates, the cleanup and committing the images. It is off by default. The exclusion is removed when the run ends, however it ends, and one that was already there is left alone. Nothing in the working folder is scanned while it is in place. See [Speeding Up a Build](docs/usage.md#speeding-up-a-build).
+
 ### Changed
 
 - The long steps now show a progress bar with a percentage, instead of sitting silent for several minutes: applying updates, cleaning up the component store, exporting images, downloading the ISO and update packages, copying an ISO to or from a network share, and hashing the ISO. Downloads and copies also show how much has transferred and how fast. The bar updates in place, is cleared when the step finishes, and is not written to the transcript or the log.
