@@ -129,9 +129,9 @@ A machine installed from a freshly built ISO still shows a few pending items on 
 
 `DISM /Add-Package` only consumes `.msu`/`.cab` packages that bind into the component store by build number, which is exactly what makes a cumulative update integrable and these not. Passing one to `-UpdatePath` fails its `.msu`/`.cab` check.
 
-So they stay a post-install task. Left alone, Windows Update installs them on its own within a day of the machine going online. If you want them handled deterministically, do it from the answer file rather than the media:
+So they stay a post-install task. Left alone, Windows Update installs them on its own within a day of the machine going online. If you want them handled deterministically, do it from the answer file rather than the media. [`Examples/autounattend-update-after-setup.xml`](../Examples/autounattend-update-after-setup.xml) does exactly that once setup has finished: it updates Defender's security intelligence, installs whatever Windows Update still offers, and asks the Store to update its apps ([details](unattended-installs.md#finishing-the-updates-after-setup)). To do parts of it by hand instead:
 
-- Pull Defender's platform and intelligence updates at first logon with the in-box client, which needs no download URL:
+- Pull Defender's platform and intelligence updates with the in-box client, which needs no download URL:
   ```powershell
   & "$env:ProgramFiles\Windows Defender\MpCmdRun.exe" -SignatureUpdate
   ```

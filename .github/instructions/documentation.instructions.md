@@ -16,7 +16,7 @@ tokens for a decision this table already makes.
 | `reference.md` | Flow diagram, folder layout, logging, disk space, the build record written onto the ISO |
 | `scheduled-runs.md` | Task registration, build stamps, rebuild decisions, `-AutoClean` |
 | `design-notes.md` | Why something works the way it does, tradeoffs taken, alternatives rejected |
-| `unattended-installs.md` | The `Examples/` answer files and how to use them |
+| `unattended-installs.md` | Answer files with `-UnattendPath`, and the `Examples/` answer file |
 
 If a change genuinely spans two files, put the mechanism in the owning file and a one-line pointer in
 the other.

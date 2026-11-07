@@ -804,7 +804,9 @@ try {
             }
 
             $Ns = New-Object System.Xml.XmlNamespaceManager($Doc.NameTable)
-            $Ns.AddNamespace('e', 'https://schneegans.de/windows/unattend-generator/')
+            # The namespace the answer files in Examples/ use for the payloads they carry. Windows Setup
+            # ignores everything in it, and the first specialize command writes each <File> to disk.
+            $Ns.AddNamespace('e', 'https://github.com/bryceforsm/Windows-ISO-Updater/unattend')
 
             $PayloadNodes = @($Doc.SelectNodes('//e:File | //e:ExtractScript', $Ns))
             if ($PayloadNodes.Count -eq 0) {

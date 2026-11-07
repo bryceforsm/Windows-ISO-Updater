@@ -47,10 +47,8 @@ scope, and what you want back. Do not paste repository rules into it, subagents 
 
 No single-domain agent can see these, so they are yours.
 
-- `tools/Install-DellDrivers.ps1`, `Install-SurfaceDrivers.ps1`, and `Install-VMwareTools.ps1` are
-  mirrored verbatim into `Examples/autounattend-ultimate.xml`. An edit to any of them leaves the mirror
-  stale, so follow it with `tools/Sync-EmbeddedDriverScripts.ps1 -WhatIfOnly` and apply the sync. Never
-  let that edit land alone.
+- The payload namespace in `Examples/autounattend-update-after-setup.xml` is how
+  `tools/Test-Dependencies.ps1` finds its embedded scripts, so a change to either moves both.
 - The pinned external things (the oscdimg hash, Fido, the MCT and ADK fwlinks, the catalog HTML) are
   asserted in `tools/Test-Dependencies.ps1` and consumed in the main script, so they move together.
 - A new or renamed parameter is the script plus `docs/parameters.md`. Script Surgeon already routes
@@ -63,14 +61,14 @@ No single-domain agent can see these, so they are yours.
 - **Script Surgeon:** All PowerShell and batch edits. Dispatches PS51 Harness and Doc Scribe itself.
 - **PS51 Harness:** Throwaway AST extraction harnesses under PowerShell 5.1.
 - **Doc Scribe:** `README.md` and `docs/`, routed to the owning file.
-- **Answer File Editor:** The XML answer files in `Examples/`, parse-validated.
+- **Answer File Editor:** The XML answer file in `Examples/`, parse-validated.
 - **Agent Architect:** The agent definitions themselves.
 
 ## Protocol for multi-domain work
 
 1. **Split by owning domain,** not by task type, and do not broaden past the request.
 2. **Dispatch every independent domain in one parallel batch.** Sequence only where one result feeds
-   the next, for example a `tools/` edit that must land before the mirror can be synced. Put
+   the next, for example a `src/` edit that must land before its docs can describe it. Put
    Codebase Architect first only when the gate above says it earns its turn.
 3. **Report the outcome,** since the user sees your summary and not the transcripts. Name the files
    changed, the pass and fail counts from any harness run, and anything still open. Surface a
