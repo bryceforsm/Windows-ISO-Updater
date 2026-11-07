@@ -4,7 +4,7 @@ $WimCompression = if ($FastCompression) { 'Fast' } else { 'Max' }
 # Added here, at the first heavy disk work, rather than at startup, so a run that stops early (nothing has
 # changed, -CheckOnly, -ListEditions) never changes Defender's settings at all.
 if ($ExcludeWorkPathFromDefender) {
-    Add-WorkPathDefenderExclusion -Path $WorkRoot
+    Add-WorkPathDefenderExclusion -WorkRoot $WorkRoot
     Write-Host $LineBreak
 }
 

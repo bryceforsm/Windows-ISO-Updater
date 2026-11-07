@@ -165,12 +165,18 @@ So keep `-WorkPath` on a local disk, and save the network paths for `-IsoPath` a
 
 ## Microsoft Defender Exclusions
 
-Applying a cumulative update to a mounted image writes tens of thousands of files, and Defender's real-time protection scans each one as it lands. Excluding the folders where DISM does that work can make servicing noticeably faster. The script never changes Defender settings itself, so this is an optional step you take once, from an elevated prompt:
+Applying a cumulative update to a mounted image writes tens of thousands of files, and Defender's real-time protection scans each one as it lands. Excluding the folders where DISM does that work can make servicing noticeably faster. The script leaves Defender's settings alone unless you ask, and there are two ways to ask.
+
+**For one run at a time**, pass `-ExcludeWorkPathFromDefender`. The script adds the exclusions below when the build starts its heavy work and removes them when the run ends, however it ends. Any of them that were already on Defender's list are left alone ([how it works](usage.md#how-the-defender-exclusion-works)).
+
+**Permanently**, add them yourself once, from an elevated prompt:
 
 ```powershell
 $Root = 'C:\WISO-Work'   # match -WorkPath if you use it
 Add-MpPreference -ExclusionPath "$Root\Mount", "$Root\WinREMount", "$Root\BuildCheck", "$Root\ISO", "$Root\WinRECache"
 ```
+
+Either way, these are the folders:
 
 | Folder | What happens there |
 | --- | --- |
