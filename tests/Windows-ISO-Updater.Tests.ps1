@@ -6,7 +6,7 @@ BeforeAll {
     $Names = @(
         'ConvertFrom-HotpatchCalendar', 'Read-ConfigFile', 'Format-ShortHash', 'Get-BuildParameterHash', 'Get-DefaultIsoName', 'Get-EditionRank', 'Get-EditionShortName',
         'Get-DismErrorCode', 'Get-DismErrorMeaning', 'Get-DismLogError', 'Get-DismMessage', 'Save-DismLog',
-        'Format-WrappedText', 'Get-FileDownload', 'Get-HotpatchBaselineKb', 'Get-PatchTuesdayStart', 'Get-ScheduledTaskArgumentString', 'Get-ScriptCommandLine', 'Get-TextSha256',
+        'Format-DismProgress', 'Format-Duration', 'Format-WrappedText', 'Get-DismPercent', 'Get-FileDownload', 'Get-HotpatchBaselineKb', 'Get-PatchTuesdayStart', 'Get-ScheduledTaskArgumentString', 'Get-ScriptCommandLine', 'Get-TextSha256',
         'Resolve-EditionIndexes', 'Search-UpdateCatalog', 'Select-DefaultEditions', 'Select-HotpatchBaselineEntry', 'Test-FidoUrl', 'Test-IsHotpatchBaseline',
         'Test-MicrosoftDownloadUrl', 'Test-RebuildNeeded', 'Test-SameWriteTime', 'Test-UpdatePackageFile'
     )
@@ -352,6 +352,47 @@ Describe 'Get-PatchTuesdayStart' {
         $Start = Get-PatchTuesdayStart
         $Start.TimeOfDay | Should -BeOfType [timespan]
         $Start.CrossesMidnight | Should -BeOfType [bool]
+    }
+}
+
+Describe 'Get-DismPercent' {
+    It 'reads <Expected> from <Line>' -TestCases @(
+        @{ Line = '[=                          2.0%                           ]'; Expected = 2 }
+        @{ Line = '[==========================100.0%==========================]'; Expected = 100 }
+        @{ Line = '[===========                47,5%                          ]'; Expected = 47 }
+        @{ Line = '  [====  10%  ]  '; Expected = 10 }
+    ) {
+        Get-DismPercent -Line $Line | Should -Be $Expected
+    }
+
+    It 'ignores <Line>' -TestCases @(
+        @{ Line = 'The operation completed successfully.' }
+        @{ Line = 'Image Version: 10.0.26100.1' }
+        @{ Line = 'Free space is 15% of the disk [warning]' }
+        @{ Line = '' }
+    ) {
+        Get-DismPercent -Line $Line | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Format-DismProgress' {
+    It 'fills the bar in proportion to the percentage' {
+        $Line = Format-DismProgress -Percent 50 -Elapsed ([TimeSpan]::FromSeconds(133)) -Width 120 -Indent 4
+        $Line | Should -Be ('    [' + ('#' * 20) + ('-' * 20) + ']  50%  2m 13s')
+    }
+
+    It 'never reaches the last column, whatever the width' {
+        foreach ($Width in 30, 40, 60, 80, 200) {
+            foreach ($Percent in 0, 37, 100) {
+                $Line = Format-DismProgress -Percent $Percent -Elapsed ([TimeSpan]::FromMinutes(75)) -Width $Width -Indent 28
+                $Line.Length | Should -BeLessThan $Width
+            }
+        }
+    }
+
+    It 'drops the indent on a narrow console rather than squeezing the bar to nothing' {
+        $Line = Format-DismProgress -Percent 10 -Elapsed ([TimeSpan]::FromSeconds(5)) -Width 40 -Indent 28
+        $Line | Should -Match '^\[[#-]{10,}\]'
     }
 }
 

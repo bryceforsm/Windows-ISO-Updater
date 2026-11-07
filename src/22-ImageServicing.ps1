@@ -1,4 +1,72 @@
 #region Image servicing
+# The percentage on one of DISM's progress-bar lines, such as "[=====      10.0%      ]", or $null for any
+# other line. A comma is allowed as the decimal mark, because DISM formats it in the system's own locale.
+function Get-DismPercent {
+    param([string]$Line)
+    if ($Line -notmatch '^\s*\[[=\s]*(\d{1,3})(?:[.,]\d+)?%[=\s]*\]\s*$') { return $null }
+    return [math]::Min(100, [int]$Matches[1])
+}
+
+# The line shown while DISM works, such as "      [############--------]  47%  2m 13s", sized to fit the
+# console so it is never wrapped onto a second line that \r could not get back to.
+function Format-DismProgress {
+    param(
+        [int]$Percent,
+        [TimeSpan]$Elapsed,
+        [int]$Width,
+        [int]$Indent = 0
+    )
+    $Tail = ' {0,3}%  {1}' -f $Percent, (Format-Duration $Elapsed)
+    # One column is kept free, because writing into the last column makes some consoles wrap.
+    $BarWidth = [math]::Min(40, $Width - 1 - $Indent - $Tail.Length - 2)
+    if ($BarWidth -lt 10) {
+        $Indent = 0
+        $BarWidth = [math]::Max(0, $Width - 1 - $Tail.Length - 2)
+    }
+    $Filled = [int][math]::Floor($BarWidth * $Percent / 100)
+    return (' ' * $Indent) + '[' + ('#' * $Filled) + ('-' * ($BarWidth - $Filled)) + ']' + $Tail
+}
+
+# Runs dism.exe and returns everything it printed, leaving $LASTEXITCODE as DISM set it. DISM redraws its
+# progress bar with carriage returns, and PowerShell hands each redraw over as a line of its own, so the
+# percentage can be read off as it goes and shown on a single line that is overwritten in place, then
+# cleared when DISM finishes. That line is written straight to the console rather than through Write-Host,
+# so it never reaches the transcript or the CMTrace log, and it is skipped when output is redirected.
+function Invoke-Dism {
+    param(
+        [Parameter(Mandatory)][string[]]$ArgumentList,
+        [int]$Indent = 28
+    )
+
+    $Width = Get-ConsoleWidth
+    $Start = Get-Date
+    $Shown = -1
+    $Drawn = $false
+    try {
+        & dism.exe @ArgumentList 2>&1 | ForEach-Object {
+            $Line = "$_"
+            if ($Width -gt 0) {
+                $Percent = Get-DismPercent -Line $Line
+                # DISM redraws the bar many times per percent, so the console is only touched when the number moves.
+                if ($null -ne $Percent -and $Percent -ne $Shown) {
+                    $Shown = $Percent
+                    try {
+                        [Console]::Write("`r" + (Format-DismProgress -Percent $Percent -Elapsed ((Get-Date) - $Start) -Width $Width -Indent $Indent))
+                        $Drawn = $true
+                    }
+                    catch { $Width = 0 }   # a host without a real console, so stop trying
+                }
+            }
+            $Line
+        }
+    }
+    finally {
+        # Blank the progress line, so the next message starts on a clean line, as it would have without it.
+        if ($Drawn) {
+            try { [Console]::Write("`r" + (' ' * ($Width - 1)) + "`r") } catch { }
+        }
+    }
+}
 # Pulls the servicing stack update out of a combined SSU+LCU .msu and applies it on its own. Windows rejects
 # a cumulative update with 0x800F0823 when the image's stack is older than the update needs, and DISM does
 # not always take the stack out of the combined package by itself when servicing offline.
@@ -32,7 +100,7 @@ function Add-ServicingStack {
         }
 
         Write-HostTimestamp "      Applying the bundled servicing stack update first: $($Ssu.Name)" -ForegroundColor DarkYellow
-        & dism.exe "/Image:$MountDir" '/Add-Package' "/PackagePath:$($Ssu.FullName)" @LogArgs | Out-Null
+        Invoke-Dism -ArgumentList (@("/Image:$MountDir", '/Add-Package', "/PackagePath:$($Ssu.FullName)") + $LogArgs) | Out-Null
         if ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq 3010) {
             Write-HostTimestamp '      Servicing stack updated.' -ForegroundColor Green
             return $true
@@ -208,7 +276,7 @@ function Add-UpdateGroup {
         # servicing stack, a momentary I/O hiccup) often clear on a second attempt.
         $MaxAttempts = 2
         for ($Attempt = 1; $Attempt -le $MaxAttempts; $Attempt++) {
-            $Output = & dism.exe "/Image:$MountDir" '/Add-Package' "/PackagePath:$Target" "/LogPath:$DismLog" 2>&1
+            $Output = Invoke-Dism -ArgumentList "/Image:$MountDir", '/Add-Package', "/PackagePath:$Target", "/LogPath:$DismLog"
             $ExitCode = $LASTEXITCODE
 
             if ($ExitCode -eq 0 -or $ExitCode -eq 3010) {
@@ -232,7 +300,7 @@ function Add-UpdateGroup {
         # until the image's servicing stack is brought forward.
         if (($Output -match '0x800f0823') -and (Add-ServicingStack -MountDir $MountDir -PackagePath $Target -StageDir $Stage -LogPath $DismLog)) {
             Write-HostTimestamp '      Retrying the update now the servicing stack is current...' -ForegroundColor DarkYellow
-            $Output = & dism.exe "/Image:$MountDir" '/Add-Package' "/PackagePath:$Target" "/LogPath:$DismLog" 2>&1
+            $Output = Invoke-Dism -ArgumentList "/Image:$MountDir", '/Add-Package', "/PackagePath:$Target", "/LogPath:$DismLog"
             $ExitCode = $LASTEXITCODE
             if ($ExitCode -eq 0 -or $ExitCode -eq 3010) {
                 Write-HostTimestamp '      Applied.' -ForegroundColor Green

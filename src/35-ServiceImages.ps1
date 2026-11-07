@@ -145,7 +145,7 @@ if ($UpdateGroups.Count -gt 0 -or $script:DriverInfFiles.Count -gt 0) {
                                 Mount-WindowsImage -ImagePath $WinReWim -Index 1 -Path $WinReMount -ErrorAction Stop | Out-Null
                                 Add-UpdateGroup -MountDir $WinReMount -Group $SafeOsGroup -Label 'Safe OS Dynamic Update' -ImageLabel $WinReLabel | Out-Null
                                 Write-HostTimestamp '      Cleaning up the recovery image component store (/StartComponentCleanup /ResetBase)...'
-                                & dism.exe /Image:"$WinReMount" /Cleanup-Image /StartComponentCleanup /ResetBase | Out-Null
+                                Invoke-Dism -ArgumentList "/Image:$WinReMount", '/Cleanup-Image', '/StartComponentCleanup', '/ResetBase' | Out-Null
                                 Remove-ImageResidue -MountDir $WinReMount
                                 Dismount-WindowsImage -Path $WinReMount -Save -ErrorAction Stop | Out-Null
                                 Optimize-WinReImage -WinReWim $WinReWim -ImageLabel $WinReLabel
@@ -185,7 +185,7 @@ if ($UpdateGroups.Count -gt 0 -or $script:DriverInfFiles.Count -gt 0) {
                 if ($UpdateGroups.Count -gt 0) {
                     Write-HostTimestamp '    Cleaning up the component store (/StartComponentCleanup /ResetBase)...'
                     # ResetBase permanently removes superseded components, shrinking the image. This is slow.
-                    & dism.exe /Image:"$MountDir" /Cleanup-Image /StartComponentCleanup /ResetBase | Out-Null
+                    Invoke-Dism -ArgumentList "/Image:$MountDir", '/Cleanup-Image', '/StartComponentCleanup', '/ResetBase' -Indent 26 | Out-Null
                 }
 
                 Remove-ImageResidue -MountDir $MountDir
@@ -250,7 +250,7 @@ if ($UpdateGroups.Count -gt 0 -or $script:DriverInfFiles.Count -gt 0) {
                     if ([int]$BootImg.ImageIndex -eq 2) {
                         Add-ImageDrivers -MountDir $MountDir -InfFiles $script:DriverInfFiles -ImageLabel "boot.wim index 2 ($($BootImg.ImageName))" | Out-Null
                     }
-                    if ($UpdateGroups.Count -gt 0) { & dism.exe /Image:"$MountDir" /Cleanup-Image /StartComponentCleanup | Out-Null }
+                    if ($UpdateGroups.Count -gt 0) { Invoke-Dism -ArgumentList "/Image:$MountDir", '/Cleanup-Image', '/StartComponentCleanup' -Indent 26 | Out-Null }
                     Remove-ImageResidue -MountDir $MountDir
 
                     # Index 2 is the Windows Setup image. The cumulative update raises the version of the
