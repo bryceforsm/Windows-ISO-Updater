@@ -210,8 +210,38 @@ Open the `.log` in CMTrace or OneTrace and you get the usual columns. Severity c
 
 The first lines in each log record the startup banner. It includes a run date line formatted as full month name, day with English ordinal suffix, and year (for example `Run date       : September 20th 2026`), followed by the thread culture, UI culture, and system locale. This is logged because culture-sensitive parsing (for example, the date format in the Microsoft Update Catalog search results) breaks only on non-English machines, so if a catalog query fails or a date is parsed incorrectly, the log says what locale actually ran without having to ask the user.
 
+Next comes a short report on the machine itself, so a log attached to an issue already answers the questions that would otherwise take a round of replies. It takes well under a second to gather:
+
+```text
+Windows        : Windows 11 Pro 25H2, build 26200.7019, 64-bit
+PowerShell     : 5.1.26100.7019 (Desktop), host: ConsoleHost
+DISM           : 10.0.26100.7019 (C:\Windows\system32\Dism.exe)
+Run as         : CONTOSO\admin, elevated, interactive, BITS available
+Antivirus      : Microsoft Defender, real-time protection on
+Restart pending: no
+Last restart   : November 4th 2026 at 08:12 (2 days 3 hours ago)
+Working drive  : D: NTFS, 412 GB free of 931 GB, on NVMe SSD (Samsung SSD 980 PRO 1TB)
+Proxy          : none, direct connection
+Hardware       : Dell Inc. OptiPlex 7090; Intel(R) Core(TM) i7-11700 CPU @ 2.50GHz, 16 threads; 31.7 GB memory, 22.4 GB free
+```
+
+| Line | Why it is there |
+| --- | --- |
+| `Windows` | The host's own Windows, with its patch level. |
+| `PowerShell` | Windows PowerShell 5.1 and PowerShell 7 behave differently in places, so this says which one ran. |
+| `DISM` | The host's DISM does the servicing. One older than the image it services is a common reason an update refuses to apply. |
+| `Run as` | Whether the run was elevated, interactive or a scheduled run, and whether BITS can work for that logon ([why that matters](#how-files-are-downloaded)). |
+| `Antivirus` | What scans the files DISM writes. Antivirus holding a file in the mounted image is behind most access-denied and file-in-use errors. Other products are named on client Windows only, because Windows Server does not list them. |
+| `Restart pending` | A restart the host's own servicing stack or Windows Update is waiting on can make DISM fail, so that case is shown in yellow. Files waiting to be replaced at the next restart are mentioned but are not a warning, because most installers leave some. |
+| `Last restart` | When the machine last started, and how long ago. A machine that has been up for weeks has had longer for servicing work to queue behind a restart. |
+| `Working drive` | The drive under `-WorkPath`: its file system, free space and the kind of disk behind it, which decides most of a build's speed. |
+| `Proxy` | The user's proxy, which BITS and `Invoke-WebRequest` follow, and the WinHTTP proxy, which services use. Either one can be why a download fails. |
+| `Hardware` | The make and model, whether it is a virtual machine, the processor, and memory. Explains a slow run. |
+
+Anything that cannot be read shows as `unknown` instead of stopping the run. No serial numbers or other hardware identifiers are recorded, but the `Run as` line carries the Windows user name, alongside the computer name and paths the log already holds.
+
 Everything the run reports lands in the `.log` too, not just the timestamped lines: the plan printed before the confirmation prompt, the working folder list, the editions and indexes in the finished ISO, the image sizes as extracted and as shipped, the recovery image (WinRE) build per edition, and the time spent on each step. A step that fails with an unexpected error is logged as an error under that step's component before the run stops.
 
-The `_console.txt` beside it is the plain transcript. It is worth opening when a run has died in a way the script did not expect, because it also holds your answers to the confirmation prompts, anything printed before the log file existed (such as the operating system and PowerShell version checks), and the raw PowerShell error text, including the stack position.
+The `_console.txt` beside it is the plain transcript. It is worth opening when a run has died in a way the script did not expect, because it also holds your answers to the confirmation prompts, anything printed before the log file existed (such as the startup checks that refuse an unsupported operating system or PowerShell), and the raw PowerShell error text, including the stack position.
 
 [← Back to README](../README.md)

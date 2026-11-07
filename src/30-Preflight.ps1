@@ -13,6 +13,12 @@ $script:CurrentCulture   = [System.Globalization.CultureInfo]::CurrentCulture
 $script:CurrentUICulture = [System.Globalization.CultureInfo]::CurrentUICulture
 $script:SystemLocale     = try { (Get-WinSystemLocale -ErrorAction Stop).Name } catch { 'unknown' }
 Write-HostTimestamp "Locale         : Thread culture $($script:CurrentCulture.Name), UI culture $($script:CurrentUICulture.Name), system locale $script:SystemLocale"
+# The machine this run is on, so a log attached to an issue already says (see Get-EnvironmentReport).
+foreach ($EnvLine in (Get-EnvironmentReport -WorkRoot $WorkRoot)) {
+    $EnvText = '{0,-15}: {1}' -f $EnvLine.Label, $EnvLine.Value
+    if ($EnvLine.Color -eq 'Gray') { Write-HostTimestamp $EnvText }
+    else { Write-HostTimestamp $EnvText -ForegroundColor $EnvLine.Color }
+}
 if ($ServiceWinRE) {
     Write-HostTimestamp '-ServiceWinRE is deprecated and does nothing. The recovery image is serviced by default now, so pass -SkipWinRE to turn it off.' -ForegroundColor Yellow
 }

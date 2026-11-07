@@ -6,7 +6,7 @@ BeforeAll {
     $Names = @(
         'ConvertFrom-HotpatchCalendar', 'Read-ConfigFile', 'Format-ShortHash', 'Get-BuildParameterHash', 'Get-DefaultIsoName', 'Get-EditionRank', 'Get-EditionShortName',
         'Get-DismErrorCode', 'Get-DismErrorMeaning', 'Get-DismLogError', 'Get-DismMessage', 'Save-DismLog',
-        'Format-ByteProgress', 'Format-Duration', 'Format-ProgressLine', 'Format-WrappedText', 'Get-DismPercent', 'Get-FileDownload', 'Get-RobocopyPercent', 'Test-BitsUsable', 'Test-PathInList', 'Get-HotpatchBaselineKb', 'Get-PatchTuesdayStart', 'Get-ScheduledTaskArgumentString', 'Get-ScriptCommandLine', 'Get-TextSha256',
+        'Format-ByteProgress', 'Format-Duration', 'Format-ProgressLine', 'Format-WrappedText', 'Get-DismPercent', 'Get-FileDownload', 'Get-RobocopyPercent', 'Test-BitsUsable', 'Test-PathInList', 'Get-WinHttpProxy', 'Test-VirtualMachineModel', 'Format-Gigabytes', 'Format-Uptime', 'Get-HotpatchBaselineKb', 'Get-PatchTuesdayStart', 'Get-ScheduledTaskArgumentString', 'Get-ScriptCommandLine', 'Get-TextSha256',
         'Resolve-EditionIndexes', 'Search-UpdateCatalog', 'Select-DefaultEditions', 'Select-HotpatchBaselineEntry', 'Test-FidoUrl', 'Test-IsHotpatchBaseline',
         'Test-MicrosoftDownloadUrl', 'Test-RebuildNeeded', 'Test-SameWriteTime', 'Test-UpdatePackageFile'
     )
@@ -372,6 +372,82 @@ Describe 'Get-DismPercent' {
         @{ Line = '' }
     ) {
         Get-DismPercent -Line $Line | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Get-WinHttpProxy' {
+    BeforeAll {
+        # The layout "netsh winhttp set proxy" writes: version, counter, flags, then a length-prefixed proxy and bypass list.
+        function New-WinHttpSettings {
+            param([string]$Proxy, [string]$Bypass = '')
+            $Bytes = [System.Collections.Generic.List[byte]]::new()
+            $Bytes.AddRange([System.BitConverter]::GetBytes([int]0x28))
+            $Bytes.AddRange([System.BitConverter]::GetBytes([int]0))
+            $Bytes.AddRange([System.BitConverter]::GetBytes([int]$(if ($Proxy) { 3 } else { 1 })))
+            $Bytes.AddRange([System.BitConverter]::GetBytes([int]$Proxy.Length))
+            $Bytes.AddRange([System.Text.Encoding]::ASCII.GetBytes($Proxy))
+            $Bytes.AddRange([System.BitConverter]::GetBytes([int]$Bypass.Length))
+            $Bytes.AddRange([System.Text.Encoding]::ASCII.GetBytes($Bypass))
+            return , $Bytes.ToArray()
+        }
+    }
+
+    It 'reads the proxy server' {
+        Get-WinHttpProxy -Settings (New-WinHttpSettings -Proxy 'proxy.example.test:8080' -Bypass '<local>') | Should -Be 'proxy.example.test:8080'
+    }
+
+    It 'returns nothing for a direct connection' {
+        Get-WinHttpProxy -Settings (New-WinHttpSettings -Proxy '') | Should -BeNullOrEmpty
+    }
+
+    It 'returns nothing for a missing or damaged value' {
+        Get-WinHttpProxy -Settings $null | Should -BeNullOrEmpty
+        Get-WinHttpProxy -Settings ([byte[]](1, 2, 3)) | Should -BeNullOrEmpty
+        $Damaged = New-WinHttpSettings -Proxy 'proxy:8080'
+        Get-WinHttpProxy -Settings $Damaged[0..17] | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Test-VirtualMachineModel' {
+    It 'recognises <Manufacturer> <Model>' -TestCases @(
+        @{ Manufacturer = 'Microsoft Corporation'; Model = 'Virtual Machine' }
+        @{ Manufacturer = 'VMware, Inc.'; Model = 'VMware20,1' }
+        @{ Manufacturer = 'innotek GmbH'; Model = 'VirtualBox' }
+        @{ Manufacturer = 'QEMU'; Model = 'Standard PC (Q35 + ICH9, 2009)' }
+        @{ Manufacturer = 'Amazon EC2'; Model = 't3.large' }
+    ) {
+        Test-VirtualMachineModel -Manufacturer $Manufacturer -Model $Model | Should -BeTrue
+    }
+
+    It 'leaves <Manufacturer> <Model> alone' -TestCases @(
+        @{ Manufacturer = 'Dell Inc.'; Model = 'OptiPlex 7090' }
+        @{ Manufacturer = 'Microsoft Corporation'; Model = 'Surface Laptop 5' }
+        @{ Manufacturer = 'ASUS'; Model = 'System Product Name' }
+    ) {
+        Test-VirtualMachineModel -Manufacturer $Manufacturer -Model $Model | Should -BeFalse
+    }
+}
+
+Describe 'Format-Uptime' {
+    It 'shows <Expected>' -TestCases @(
+        @{ Uptime = [TimeSpan]::new(3, 4, 30, 0); Expected = '3 days 4 hours' }
+        @{ Uptime = [TimeSpan]::new(1, 1, 0, 0); Expected = '1 day 1 hour' }
+        @{ Uptime = [TimeSpan]::new(0, 5, 12, 0); Expected = '5 hours 12 minutes' }
+        @{ Uptime = [TimeSpan]::new(0, 1, 1, 0); Expected = '1 hour 1 minute' }
+        @{ Uptime = [TimeSpan]::new(0, 0, 12, 40); Expected = '12 minutes' }
+        @{ Uptime = [TimeSpan]::new(0, 0, 0, 30); Expected = '0 minutes' }
+    ) {
+        Format-Uptime -Uptime $Uptime | Should -Be $Expected
+    }
+}
+
+Describe 'Format-Gigabytes' {
+    It 'shows <Expected> for <Bytes> bytes' -TestCases @(
+        @{ Bytes = 1.5GB; Expected = '1.5 GB' }
+        @{ Bytes = 63.7GB; Expected = '63.7 GB' }
+        @{ Bytes = 476.9GB; Expected = '477 GB' }
+    ) {
+        Format-Gigabytes -Bytes $Bytes | Should -Be $Expected
     }
 }
 
