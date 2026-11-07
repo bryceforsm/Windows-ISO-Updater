@@ -1,6 +1,6 @@
 # GENERATED FILE. Edit the files in src\ and run tools\Build-Script.ps1, because changes made here are overwritten.
 # Windows ISO Updater
-# Version: 2026.11.07.3   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
+# Version: 2026.11.07.4   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
 #
 #region Script overview
 # This script builds a fully up-to-date ("slipstreamed") Windows 11, Windows 10 or Windows Server
@@ -314,7 +314,7 @@ $script:ScriptPath = $PSCommandPath
 
 # Kept in step with the header comment by tools\Update-Version.ps1, and shown in the log and recorded in
 # the build stamp so a finished ISO can be traced back to the exact script that built it.
-$ScriptVersion = '2026.11.07.3'
+$ScriptVersion = '2026.11.07.4'
 
 # A scheduled run has nobody to answer a prompt.
 if ($Scheduled) {
@@ -1990,29 +1990,32 @@ function Get-LcuTitleExclude {
 
 # Which Dynamic Update a catalog entry is: 'SafeOS', 'Setup' or $null. Windows 11 says so in the title, but Windows
 # 10 and Server title both kinds plain "Dynamic Update", and size cannot tell them apart (in July 2025 the Windows 10
-# Safe OS update was the smaller of the two). The KB's support page title always names the kind, so that decides,
-# once per KB per run.
+# Safe OS update was the smaller of the two). The entry's catalog details page can: its description reads
+# "ComponentUpdate:" for a Safe OS update and "SetupUpdate:" for a Setup one, matching what the KB support pages
+# call them. The support pages themselves refuse Windows PowerShell after its first request, so they are not used.
+# Read once per entry per run.
 function Get-DynamicUpdateKind {
     param($Entry)
     $Title = "$($Entry.Title)"
     if ($Title -match '(?i)safe os dynamic update') { return 'SafeOS' }
     if ($Title -match '(?i)setup dynamic update') { return 'Setup' }
-    if ($Title -notmatch '(?i)\bdynamic update\b') { return $null }
-    if ($Title -notmatch '(?i)KB(\d{6,})') { return $null }
-    $Kb = $Matches[1]
+    if ($Title -notmatch '(?i)\bdynamic update\b' -or -not $Entry.Guid) { return $null }
+    $Guid = "$($Entry.Guid)"
     if (-not $script:DynamicUpdateKindCache) { $script:DynamicUpdateKindCache = @{} }
-    if ($script:DynamicUpdateKindCache.ContainsKey($Kb)) { return $script:DynamicUpdateKindCache[$Kb] }
+    if ($script:DynamicUpdateKindCache.ContainsKey($Guid)) { return $script:DynamicUpdateKindCache[$Guid] }
     $Kind = $null
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     try {
-        $Page = Invoke-WebRequest -Uri "https://support.microsoft.com/help/$Kb" -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
-        if ("$($Page.Content)" -match '(?is)<title>(.*?)</title>') {
-            $PageTitle = $Matches[1]
-            if ($PageTitle -match '(?i)safe os dynamic update') { $Kind = 'SafeOS' }
-            elseif ($PageTitle -match '(?i)setup dynamic update') { $Kind = 'Setup' }
+        $Page = Invoke-WebRequest -Uri "https://www.catalog.update.microsoft.com/ScopedViewInline.aspx?updateid=$([System.Uri]::EscapeDataString($Guid))" -UseBasicParsing -TimeoutSec 60 -ErrorAction Stop
+        if ("$($Page.Content)" -match '(?s)id="ScopedViewHandler_desc"[^>]*>(.*?)</span>') {
+            $Description = $Matches[1]
+            if ($Description -match '(?i)\bComponentUpdate\b|recovery environment') { $Kind = 'SafeOS' }
+            elseif ($Description -match '(?i)\bSetupUpdate\b|setup binaries') { $Kind = 'Setup' }
         }
+        if (-not $Kind) { Write-HostTimestamp "  The catalog does not say which Dynamic Update '$Title' is, so it is passed over." -ForegroundColor DarkYellow }
     }
-    catch { Write-HostTimestamp "  Could not read the KB$Kb support page to tell which Dynamic Update it is, so it is passed over." -ForegroundColor DarkYellow }
-    $script:DynamicUpdateKindCache[$Kb] = $Kind
+    catch { Write-HostTimestamp "  Could not read the catalog details for '$Title' to tell which Dynamic Update it is, so it is passed over." -ForegroundColor DarkYellow }
+    $script:DynamicUpdateKindCache[$Guid] = $Kind
     return $Kind
 }
 

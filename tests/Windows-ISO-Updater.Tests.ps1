@@ -259,25 +259,27 @@ Describe 'Telling the Dynamic Updates apart' {
         Should -Invoke Invoke-WebRequest -Times 0 -Exactly
     }
 
-    It "reads a plain Windows 10 title's kind off its KB page, once" {
-        Mock Invoke-WebRequest { [pscustomobject]@{ Content = '<html><title>KB5062691: Safe OS Dynamic Update for Windows 10, version 21H2 and 22H2: July 8, 2025 | Microsoft Support</title></html>' } }
-        $Entry = [pscustomobject]@{ Title = '2025-07 Dynamic Update for Windows 10 Version 22H2 for x64-based Systems (KB5062691)' }
+    It "reads a plain Windows 10 title's kind off its catalog details page, once" {
+        Mock Invoke-WebRequest { [pscustomobject]@{ Content = '<span id="ScopedViewHandler_desc">ComponentUpdate:</span>' } }
+        $Entry = [pscustomobject]@{ Title = '2025-07 Dynamic Update for Windows 10 Version 22H2 for x64-based Systems (KB5062691)'; Guid = 'safe-os' }
         Get-DynamicUpdateKind -Entry $Entry | Should -Be 'SafeOS'
         Get-DynamicUpdateKind -Entry $Entry | Should -Be 'SafeOS'
-        Should -Invoke Invoke-WebRequest -Times 1 -Exactly
+        Should -Invoke Invoke-WebRequest -Times 1 -Exactly -ParameterFilter { $Uri -like 'https://www.catalog.update.microsoft.com/ScopedViewInline.aspx?updateid=safe-os' }
     }
 
-    It 'passes over an entry whose KB page cannot be read' {
-        Mock Invoke-WebRequest { throw 'blocked' }
-        Get-DynamicUpdateKind -Entry ([pscustomobject]@{ Title = '2025-07 Dynamic Update for Windows 10 Version 22H2 for x64-based Systems (KB5062682)' }) | Should -BeNullOrEmpty
+    It 'passes over an entry whose catalog details cannot be read or do not say' {
+        Mock Invoke-WebRequest { throw 'unreachable' }
+        Get-DynamicUpdateKind -Entry ([pscustomobject]@{ Title = '2025-07 Dynamic Update for Windows 10 Version 22H2 for x64-based Systems (KB5062682)'; Guid = 'a' }) | Should -BeNullOrEmpty
+        Mock Invoke-WebRequest { [pscustomobject]@{ Content = '<span id="ScopedViewHandler_desc">Something else.</span>' } }
+        Get-DynamicUpdateKind -Entry ([pscustomobject]@{ Title = '2025-07 Dynamic Update for Windows 10 Version 22H2 for x64-based Systems (KB5062682)'; Guid = 'b' }) | Should -BeNullOrEmpty
     }
 
     It 'picks the Safe OS update even when it is the smaller one of the month' {
-        Mock Invoke-WebRequest -ParameterFilter { $Uri -like '*5062691' } { [pscustomobject]@{ Content = '<title>KB5062691: Safe OS Dynamic Update for Windows 10</title>' } }
-        Mock Invoke-WebRequest -ParameterFilter { $Uri -like '*5062682' } { [pscustomobject]@{ Content = '<title>KB5062682: Setup Dynamic Update for Windows 10</title>' } }
+        Mock Invoke-WebRequest -ParameterFilter { $Uri -like '*=kb5062691' } { [pscustomobject]@{ Content = '<span id="ScopedViewHandler_desc">ComponentUpdate:</span>' } }
+        Mock Invoke-WebRequest -ParameterFilter { $Uri -like '*=kb5062682' } { [pscustomobject]@{ Content = '<span id="ScopedViewHandler_desc">SetupUpdate:</span>' } }
         $Candidates = @(
-            [pscustomobject]@{ Title = '2025-07 Dynamic Update for Windows 10 Version 22H2 for x64-based Systems (KB5062682)'; LastUpdated = [datetime]'2025-07-08'; SizeMB = 21.6 }
-            [pscustomobject]@{ Title = '2025-07 Dynamic Update for Windows 10 Version 22H2 for x64-based Systems (KB5062691)'; LastUpdated = [datetime]'2025-07-08'; SizeMB = 13.2 }
+            [pscustomobject]@{ Title = '2025-07 Dynamic Update for Windows 10 Version 22H2 for x64-based Systems (KB5062682)'; LastUpdated = [datetime]'2025-07-08'; SizeMB = 21.6; Guid = 'kb5062682' }
+            [pscustomobject]@{ Title = '2025-07 Dynamic Update for Windows 10 Version 22H2 for x64-based Systems (KB5062691)'; LastUpdated = [datetime]'2025-07-08'; SizeMB = 13.2; Guid = 'kb5062691' }
         )
         (Select-DynamicUpdateEntry -Candidates $Candidates -Kind 'SafeOS').Title | Should -Match 'KB5062691'
         (Select-DynamicUpdateEntry -Candidates $Candidates -Kind 'Setup').Title | Should -Match 'KB5062682'
