@@ -1,10 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Windows ISO Updater: four panes, an install disc, and an update badge in the style of the Windows
+       Update sync arrows. Original artwork, so it can ship with the repository under its own license. -->
   <defs>
     <linearGradient id="disc" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#f7f7f7"/>
       <stop offset="0.35" stop-color="#d6e6f5"/>
       <stop offset="0.6" stop-color="#eee4f3"/>
       <stop offset="1" stop-color="#b9c0ca"/>
+    </linearGradient>
+    <linearGradient id="badge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1a86d9"/>
+      <stop offset="1" stop-color="#005fb8"/>
     </linearGradient>
     <mask id="hole">
       <rect width="64" height="64" fill="#fff"/>
@@ -15,11 +21,20 @@
     <circle cx="36" cy="36" r="26" fill="url(#disc)" stroke="#7a7f87" stroke-width="1.5"/>
     <circle cx="36" cy="36" r="9" fill="#fafafa" stroke="#9aa0a8"/>
   </g>
-  <path d="M48 54V42h-4l7-11 7 11h-4v12z" fill="#0078d4" stroke="#fff" stroke-width="2" stroke-linejoin="round" paint-order="stroke"/>
   <g fill="#0078d4" stroke="#fff" stroke-width="2" paint-order="stroke">
     <rect x="3" y="3" width="12" height="12" rx="1"/>
     <rect x="17" y="3" width="12" height="12" rx="1"/>
     <rect x="3" y="17" width="12" height="12" rx="1"/>
     <rect x="17" y="17" width="12" height="12" rx="1"/>
+  </g>
+  <!-- Update badge: two arcs chasing each other round the circle, each ending in an arrowhead. -->
+  <circle cx="48" cy="48" r="14.5" fill="url(#badge)" stroke="#fff" stroke-width="2"/>
+  <g fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round">
+    <path d="M40.6 45.3A8 8 0 0 1 54.6 43.4"/>
+    <path d="M55.4 50.7A8 8 0 0 1 41.4 52.6"/>
+  </g>
+  <g fill="#fff">
+    <path d="M57.3 39.6L56.9 46.6L50.9 43.1Z"/>
+    <path d="M38.7 56.4L39.1 49.4L45.1 52.9Z"/>
   </g>
 </svg>
