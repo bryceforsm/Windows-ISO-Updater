@@ -244,7 +244,7 @@ DISM has no setting that makes it faster, but most of a build's time goes on thi
 
 1. **Keep fewer editions.** Each edition is serviced separately, so the time grows with how many you keep. `-KeepEditions "Windows 11 Pro"` services one instead of three ([Removing Editions](#removing-editions-slimming-the-iso)).
 2. **Put the working folder on a fast local SSD.** DISM is mostly limited by the disk, so `-WorkPath` on an NVMe drive is much quicker than on a SATA SSD or a hard disk. Never use a network share or a cloud-synced folder, which the script warns about.
-3. **Exclude the working folder from Defender** with `-ExcludeWorkPathFromDefender`. Defender otherwise scans every file DISM writes into a mounted image, and an image holds hundreds of thousands of them, which slows applying updates, the cleanup and the commit.
+3. **Exclude DISM's working folders from Defender** with `-ExcludeWorkPathFromDefender`. Defender otherwise scans every file DISM writes into a mounted image, and an image holds hundreds of thousands of them, which slows applying updates, the cleanup and the commit.
 4. **Use `-FastCompression`.** Exports are much quicker, for an `install.wim` typically 5-15% bigger.
 5. **Skip what you do not need.** `-SkipDotNet` leaves out the .NET update, and `-SkipWinRE` leaves the recovery image as the media shipped it. Each saves a whole servicing pass.
 
@@ -257,12 +257,12 @@ DISM has no setting that makes it faster, but most of a build's time goes on thi
 
 `-ExcludeWorkPathFromDefender` is the one speed option that changes the machine rather than the build, so it is off unless you ask for it.
 
-- The working folder (`C:\WISO-Work` by default, or your `-WorkPath`) is added to Defender's exclusions when the build starts its heavy work, after the checks that can end a run early. A run that finds nothing has changed never touches Defender.
-- It is **removed when the run ends, however it ends.** A normal finish removes it before the window waits for Enter. For an error, Ctrl+C or a closed window, a small hidden process started with the exclusion waits for the run to end and removes it then.
-- If a restart or power cut ends the run, the next run removes the leftover exclusion before it does anything else, whether or not it uses the switch. It knows the exclusion is its own to remove from `DefenderExclusion.json`, a marker in the working folder.
-- An exclusion that was **already on Defender's list** before the run is left exactly as it was.
-- **While it is in place, nothing in the working folder is scanned**, including an ISO or update packages downloaded into it during the run. The update packages are checked against the hash in their catalog file name, or their signature, before they are used, but if you need everything scanned as it arrives, leave the switch off.
-- It does nothing when another antivirus is the active one, because Defender's exclusions then change nothing. Exclude the working folder in that product instead. Where Defender's exclusions are managed by Group Policy or Intune, a local exclusion may not apply, and the script says so and carries on with scanning as usual.
+- **Only the folders DISM works in are excluded:** `ISO`, `Mount`, `WinREMount`, `BuildCheck` and `WinRECache` under the working folder (`C:\WISO-Work` by default, or your `-WorkPath`). [Microsoft Defender Exclusions](reference.md#microsoft-defender-exclusions) says what happens in each. `Downloads`, `Output` and `OutputStaging` stay scanned, so files that came from the internet and the finished ISO are still checked. Each of those is read only once, so scanning them costs little.
+- The exclusions are added when the build starts its heavy work, after the checks that can end a run early. A run that finds nothing has changed never touches Defender.
+- They are **removed when the run ends, however it ends.** A normal finish removes them before the window waits for Enter. For an error, Ctrl+C or a closed window, a small hidden process started with the exclusions waits for the run to end and removes them then.
+- If a restart or power cut ends the run, the next run removes the leftover exclusions before it does anything else, whether or not it uses the switch. It knows which ones are its own to remove from `DefenderExclusion.json`, a marker in the working folder.
+- Any of those folders **already on Defender's list** before the run, for example because you added them yourself, are left exactly as they were.
+- It does nothing when another antivirus is the active one, because Defender's exclusions then change nothing. Exclude the folders in that product instead. Where Defender's exclusions are managed by Group Policy or Intune, a local exclusion may not apply, and the script says so and carries on with scanning as usual.
 
 To check that nothing was left behind, list Defender's exclusions in an elevated PowerShell:
 

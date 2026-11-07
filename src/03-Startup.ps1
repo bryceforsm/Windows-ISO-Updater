@@ -6,7 +6,7 @@ $script:ScriptPath = $PSCommandPath
 
 # Kept in step with the header comment by tools\Update-Version.ps1, and shown in the log and recorded in
 # the build stamp so a finished ISO can be traced back to the exact script that built it.
-$ScriptVersion = '2026.11.06.7'
+$ScriptVersion = '2026.11.06.8'
 
 # A scheduled run has nobody to answer a prompt.
 if ($Scheduled) {
@@ -327,8 +327,8 @@ $script:WimSizes = New-Object System.Collections.Generic.List[psobject]
 # editions that ship the same one can take a copy instead of repeating the work.
 $script:WinReCachePath = $null
 $script:WinReCacheHash = $null
-# The Defender exclusion this run added (-ExcludeWorkPathFromDefender), kept until the end of the run removes it.
-$script:DefenderExclusionPath = $null
+# The Defender exclusions this run added (-ExcludeWorkPathFromDefender), kept until the end of the run removes them.
+$script:DefenderExclusionPaths = $null
 # What recovery environment each edition carries, sampled while its install.wim index is mounted.
 $script:WinReVersions = New-Object System.Collections.Generic.List[psobject]
 # Keyed on WIM path and index, because reading a build costs a read-only mount and more than one caller wants it.

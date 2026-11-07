@@ -210,6 +210,31 @@ What remains after that is genuine variance in what `/ResetBase` managed to recl
 
 If two builds still differ by hundreds of megabytes, compare their stamps rather than guessing. A `Result` of `SuccessWithWarnings` means a package failed to apply to at least one edition and that ISO is genuinely under-patched.
 
+## Why PowerShell
+
+A tool like this could be written in almost anything. Most of a build is spent waiting on DISM, downloads and the disk, so the language barely affects how long a run takes. What it does affect is what you need before the first run, how well the language fits the tools the work depends on, and whether you can read what you are about to run as administrator. PowerShell wins on all three.
+
+**It is already there.** Windows PowerShell 5.1 ships with every version of Windows this tool supports, Windows 10 and Server 2016 onward. There is no runtime to install, no package manager, and nothing to unpack. Copy two files onto a fresh build machine or a locked-down server and the first run works. Python, Node or a newer .NET would each be one more thing to install, keep up to date and explain in the requirements, on exactly the kind of machine where installing things is the hard part. PowerShell 7 is supported as well, but never required.
+
+**It is the language the tools already speak.** Nearly everything a build touches is a Windows component with a PowerShell front end or a console tool PowerShell runs natively:
+
+| Job | What the script uses |
+| --- | --- |
+| Reading, mounting and servicing images | The DISM module (`Get-WindowsImage`, `Mount-WindowsImage`, `Add-WindowsDriver`) and `dism.exe` |
+| Mounting the source ISO | `Mount-DiskImage` |
+| Downloading | BITS (`Start-BitsTransfer`), with `Invoke-WebRequest` as the fallback |
+| Scheduled runs | The ScheduledTasks module |
+| Defender, machine and OS details | The Defender module and CIM |
+| Copying and building the media | `robocopy.exe` and `oscdimg.exe` |
+
+Any other language would wrap these same commands or call their underlying C APIs directly, which is more code, written in a less familiar form, for the same result. When PowerShell's own commands fall short, all of .NET is one line away. The file hashing uses `FileStream` with a 4 MB buffer, because `Get-FileHash` reads 4 KB at a time, which crawls on a network share. The one-run-per-working-folder lock is a named `Mutex`.
+
+**You can read it before you run it.** The script runs elevated and rewrites Windows images, so being able to check what it does matters more than usual. A release is one plain-text `.ps1` beside a launcher `.bat`, with a published SHA-256 for each, and the [build record](reference.md#the-build-record-on-the-iso) on every ISO carries a copy of the exact script that built it. A compiled program would ask for trust instead. A script just has to be opened. It also reads naturally to the people most likely to run it: Windows administrators already know PowerShell, so they can follow a log back to the code, adjust a run or send a fix without learning a new language first.
+
+**What it costs.** PowerShell has no compiler to catch mistakes before a run, so the repository leans on PSScriptAnalyzer and on Pester tests that lift functions out of the script and run them on their own, under both Windows PowerShell 5.1 and PowerShell 7. Targeting 5.1 also rules out newer syntax, and the two versions differ in ways that only show up when a script runs under both, which is why every change is tested under both. Some of its behavior is genuinely surprising. For example, PowerShell's own exit event never fires for a script started with `-File`, which is why the [Defender exclusion](usage.md#how-the-defender-exclusion-works) is removed by a small watcher process instead. And a single file several thousand lines long is hard to edit, so the code lives in `src\` as numbered files and `tools\Build-Script.ps1` joins them into the one script that ships.
+
+None of those costs outweigh what a native, preinstalled and readable script gets you for a tool whose whole job is to drive Windows' own servicing tools on Windows.
+
 ## How This Was Built
 
 Most of the code here was written with an AI model. That is worth saying plainly rather than leaving it to be guessed at, because it changes the questions a reader should ask.
