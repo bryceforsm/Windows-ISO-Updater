@@ -119,13 +119,10 @@ if ($RecoveryIsoOnly) {
                 $Cutoff = Get-OfflineLcuCutoff -Build $ImageBuild
                 if ($Cutoff) { $Cap.NotAfter = $Cutoff }
                 $Lcu = Get-CatalogLatestEntry -Query "Cumulative Update for $Product for $CatalogArch-based Systems" -TitleInclude '(?i)cumulative update (preview )?for (windows|microsoft server operating system)' -TitleExclude (Get-LcuTitleExclude) -AllowPreview:$IncludePreview @Cap
-                $SafeOsArgs = @{
-                    Query        = "Safe OS Dynamic Update $Product $CatalogArch"
-                    DownloadDir  = $DlDir
-                    TitleInclude = if ($script:EffectiveServer) { '(?i)dynamic update' } else { '(?i)safe os dynamic update' }
-                    TitleExclude = '(?i)setup dynamic update'
-                    AllowPreview = $IncludePreview
-                }
+                $SafeOsArgs = Get-DynamicUpdateSearch -Product $Product -CatalogArch $CatalogArch
+                $SafeOsArgs.DownloadDir = $DlDir
+                $SafeOsArgs.DynamicUpdateKind = 'SafeOS'
+                $SafeOsArgs.AllowPreview = $IncludePreview
                 if ($Lcu -and $Lcu.LastUpdated) { $SafeOsArgs.NotAfter = $Lcu.LastUpdated }
                 $script:SafeOs = Get-LatestCatalogPackage @SafeOsArgs
                 if (-not $script:SafeOs) {

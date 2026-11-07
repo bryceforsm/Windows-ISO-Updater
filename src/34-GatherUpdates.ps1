@@ -132,19 +132,17 @@ else {
         Invoke-Task -Description 'Downloading the latest Setup Dynamic Update from the Microsoft Update Catalog...' -ScriptBlock {
             # Bounded by the LCU's own release date, since a DU published after it can carry Setup logic
             # the LCU's servicing stack does not yet expect.
-            $SetupDuArgs = @{
-                Query        = "Setup Dynamic Update $(Get-CatalogProductQuery -FeatureUpdate $FeatureName) $CatalogArch"
-                DownloadDir  = $DlDir
-                TitleInclude = '(?i)setup dynamic update'
-                AllowPreview = $IncludePreview
-            }
+            $SetupDuArgs = Get-DynamicUpdateSearch -Product (Get-CatalogProductQuery -FeatureUpdate $FeatureName) -CatalogArch $CatalogArch
+            $SetupDuArgs.DownloadDir = $DlDir
+            $SetupDuArgs.DynamicUpdateKind = 'Setup'
+            $SetupDuArgs.AllowPreview = $IncludePreview
             if ($script:LcuReleaseDate) { $SetupDuArgs.NotAfter = $script:LcuReleaseDate }
             $script:SetupDu = Get-LatestCatalogPackage @SetupDuArgs
         }
         if (-not $script:SetupDu) {
             Write-HostTimestamp '  No Setup Dynamic Update was found. The media Setup files will only be refreshed from boot.wim, which can make Windows Setup fail on the finished ISO.' -ForegroundColor Yellow
             if ($script:EffectiveServer) {
-                Write-HostTimestamp '  Microsoft only publishes one for Server 2025 and newer, so this is expected on older Server media.' -ForegroundColor DarkGray
+                Write-HostTimestamp '  Microsoft does not publish one for every Server release, so this can be expected on older Server media.' -ForegroundColor DarkGray
             }
             Write-Host $LineBreak
         }
@@ -152,18 +150,14 @@ else {
 
     if (-not $SkipWinRE -and -not $script:LcuUpToDate) {
         Invoke-Task -Description 'Looking for a Safe OS Dynamic Update for the recovery image (WinRE)...' -ScriptBlock {
-            # Server media labels the Safe OS package plain "Dynamic Update", so the Setup one is excluded
-            # by name instead of the Safe OS one being required by name.
-            $SafeInclude = if ($script:EffectiveServer) { '(?i)dynamic update' } else { '(?i)safe os dynamic update' }
+            # Windows 10 and Server title both kinds plain "Dynamic Update", so the kind is read off each
+            # candidate's KB page (see Get-DynamicUpdateKind) rather than its title.
             # Bounded by the LCU's release date for the same reason the Setup DU is: a Safe OS package
             # published later targets a servicing stack this month's LCU has not put in the image yet.
-            $SafeOsArgs = @{
-                Query        = "Safe OS Dynamic Update $(Get-CatalogProductQuery -FeatureUpdate $FeatureName) $CatalogArch"
-                DownloadDir  = $DlDir
-                TitleInclude = $SafeInclude
-                TitleExclude = '(?i)setup dynamic update'
-                AllowPreview = $IncludePreview
-            }
+            $SafeOsArgs = Get-DynamicUpdateSearch -Product (Get-CatalogProductQuery -FeatureUpdate $FeatureName) -CatalogArch $CatalogArch
+            $SafeOsArgs.DownloadDir = $DlDir
+            $SafeOsArgs.DynamicUpdateKind = 'SafeOS'
+            $SafeOsArgs.AllowPreview = $IncludePreview
             if ($script:LcuReleaseDate) { $SafeOsArgs.NotAfter = $script:LcuReleaseDate }
             $script:SafeOs = Get-LatestCatalogPackage @SafeOsArgs
         }

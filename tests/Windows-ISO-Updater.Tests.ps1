@@ -5,7 +5,7 @@ BeforeAll {
     $Ast = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path -LiteralPath $ScriptFile).Path, [ref]$null, [ref]$null)
     $Names = @(
         'ConvertFrom-HotpatchCalendar', 'Read-ConfigFile', 'Format-ShortHash', 'Get-BuildParameterHash', 'Get-DefaultIsoName', 'Get-EditionRank', 'Get-EditionShortName', 'Get-FeatureUpdateName',
-        'Get-DismErrorCode', 'Get-DismErrorMeaning', 'Get-DismLogError', 'Get-DismMessage', 'Save-DismLog', 'Format-ExitCode', 'Test-DismImageUnserviceable', 'Test-DismEsuOfflineRefusal', 'Get-OfflineLcuCutoff', 'Get-LcuTitleExclude', 'Search-UpdateCatalogUpTo', 'Get-CatalogLatestEntry','Get-CabFileList', 'Expand-ServicingStack', 'Test-StandaloneServicingStack',
+        'Get-DismErrorCode', 'Get-DismErrorMeaning', 'Get-DismLogError', 'Get-DismMessage', 'Save-DismLog', 'Format-ExitCode', 'Test-DismImageUnserviceable', 'Test-DismEsuOfflineRefusal', 'Get-OfflineLcuCutoff', 'Get-LcuTitleExclude', 'Search-UpdateCatalogUpTo', 'Get-CatalogLatestEntry', 'Get-DynamicUpdateKind', 'Select-DynamicUpdateEntry', 'Get-DynamicUpdateSearch', 'Get-CabFileList', 'Expand-ServicingStack', 'Test-StandaloneServicingStack',
         'Format-ByteProgress', 'Format-DismProgressDetail', 'Format-Duration', 'Format-ProgressLine', 'Format-WrappedText', 'Get-DismPercent', 'Get-FileDownload', 'Get-RobocopyPercent', 'Test-BitsUsable', 'Test-PathInList', 'Get-WinHttpProxy', 'Test-VirtualMachineModel', 'Format-Gigabytes', 'Format-Uptime', 'Get-HotpatchBaselineKb', 'Get-PatchTuesdayStart', 'Get-ScheduledTaskArgumentString', 'Get-ScriptCommandLine', 'Get-TextSha256',
         'Resolve-EditionIndexes', 'Search-UpdateCatalog', 'Select-DefaultEditions', 'Select-HotpatchBaselineEntry', 'Test-FidoUrl', 'Test-IsHotpatchBaseline',
         'Test-MicrosoftDownloadUrl', 'Test-RebuildNeeded', 'Test-SameWriteTime', 'Test-UpdatePackageFile'
@@ -246,6 +246,52 @@ Describe 'The offline cumulative update cap' {
         $script:EffectiveServer = $true
         '2025-10 Cumulative Update for Microsoft server operating system version 21H2 for x64-based Systems (KB5070884)' | Should -Not -Match (Get-LcuTitleExclude)
         $script:EffectiveServer = $false
+    }
+}
+
+Describe 'Telling the Dynamic Updates apart' {
+    BeforeEach { $script:DynamicUpdateKindCache = @{} }
+
+    It 'takes the kind from a Windows 11 title without reading the KB page' {
+        Mock Invoke-WebRequest { throw 'should not be called' }
+        Get-DynamicUpdateKind -Entry ([pscustomobject]@{ Title = '2026-10 Safe OS Dynamic Update for Windows 11, version 24H2 for x64-based Systems (KB5127654)' }) | Should -Be 'SafeOS'
+        Get-DynamicUpdateKind -Entry ([pscustomobject]@{ Title = '2026-10 Setup Dynamic Update for Windows 11, version 24H2 for x64-based Systems (KB5127650)' }) | Should -Be 'Setup'
+        Should -Invoke Invoke-WebRequest -Times 0 -Exactly
+    }
+
+    It "reads a plain Windows 10 title's kind off its KB page, once" {
+        Mock Invoke-WebRequest { [pscustomobject]@{ Content = '<html><title>KB5062691: Safe OS Dynamic Update for Windows 10, version 21H2 and 22H2: July 8, 2025 | Microsoft Support</title></html>' } }
+        $Entry = [pscustomobject]@{ Title = '2025-07 Dynamic Update for Windows 10 Version 22H2 for x64-based Systems (KB5062691)' }
+        Get-DynamicUpdateKind -Entry $Entry | Should -Be 'SafeOS'
+        Get-DynamicUpdateKind -Entry $Entry | Should -Be 'SafeOS'
+        Should -Invoke Invoke-WebRequest -Times 1 -Exactly
+    }
+
+    It 'passes over an entry whose KB page cannot be read' {
+        Mock Invoke-WebRequest { throw 'blocked' }
+        Get-DynamicUpdateKind -Entry ([pscustomobject]@{ Title = '2025-07 Dynamic Update for Windows 10 Version 22H2 for x64-based Systems (KB5062682)' }) | Should -BeNullOrEmpty
+    }
+
+    It 'picks the Safe OS update even when it is the smaller one of the month' {
+        Mock Invoke-WebRequest -ParameterFilter { $Uri -like '*5062691' } { [pscustomobject]@{ Content = '<title>KB5062691: Safe OS Dynamic Update for Windows 10</title>' } }
+        Mock Invoke-WebRequest -ParameterFilter { $Uri -like '*5062682' } { [pscustomobject]@{ Content = '<title>KB5062682: Setup Dynamic Update for Windows 10</title>' } }
+        $Candidates = @(
+            [pscustomobject]@{ Title = '2025-07 Dynamic Update for Windows 10 Version 22H2 for x64-based Systems (KB5062682)'; LastUpdated = [datetime]'2025-07-08'; SizeMB = 21.6 }
+            [pscustomobject]@{ Title = '2025-07 Dynamic Update for Windows 10 Version 22H2 for x64-based Systems (KB5062691)'; LastUpdated = [datetime]'2025-07-08'; SizeMB = 13.2 }
+        )
+        (Select-DynamicUpdateEntry -Candidates $Candidates -Kind 'SafeOS').Title | Should -Match 'KB5062691'
+        (Select-DynamicUpdateEntry -Candidates $Candidates -Kind 'Setup').Title | Should -Match 'KB5062682'
+    }
+
+    It 'holds the search to the media product and architecture' {
+        $Search = Get-DynamicUpdateSearch -Product 'Windows 10 Version 22H2' -CatalogArch 'x64'
+        $Search.Query | Should -Be 'Dynamic Update Windows 10 Version 22H2 x64'
+        '2025-10 Dynamic Update for Windows 10 Version 22H2 for x64-based Systems (KB5067017)' | Should -Match $Search.TitleInclude
+        '2025-10 Safe OS Dynamic Update for Windows 11 Version 22H2 for x64-based Systems (KB5067019)' | Should -Not -Match $Search.TitleInclude
+        '2025-10 Dynamic Update for Windows 10 Version 22H2 for ARM64-based Systems (KB5067017)' | Should -Not -Match $Search.TitleInclude
+        '2025-10 Dynamic Cumulative Update for Windows 10 Version 22H2 for x64-based Systems (KB5066791)' | Should -Not -Match $Search.TitleInclude
+        '2026-10 Dynamic Update for Microsoft server operating system version 21H2 for x64-based Systems (KB5126667)' | Should -Not -Match $Search.TitleInclude
+        '2026-10 Safe OS Dynamic Update for Windows 11, version 24H2 for x64-based Systems (KB5127654)' | Should -Match (Get-DynamicUpdateSearch -Product 'Windows 11 Version 24H2' -CatalogArch 'x64').TitleInclude
     }
 }
 
