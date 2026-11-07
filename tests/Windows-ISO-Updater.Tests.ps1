@@ -6,7 +6,7 @@ BeforeAll {
     $Names = @(
         'ConvertFrom-HotpatchCalendar', 'Read-ConfigFile', 'Format-ShortHash', 'Get-BuildParameterHash', 'Get-DefaultIsoName', 'Get-EditionRank', 'Get-EditionShortName',
         'Get-DismErrorCode', 'Get-DismErrorMeaning', 'Get-DismLogError', 'Get-DismMessage', 'Save-DismLog',
-        'Format-ByteProgress', 'Format-Duration', 'Format-ProgressLine', 'Format-WrappedText', 'Get-DismPercent', 'Get-FileDownload', 'Get-RobocopyPercent', 'Get-HotpatchBaselineKb', 'Get-PatchTuesdayStart', 'Get-ScheduledTaskArgumentString', 'Get-ScriptCommandLine', 'Get-TextSha256',
+        'Format-ByteProgress', 'Format-Duration', 'Format-ProgressLine', 'Format-WrappedText', 'Get-DismPercent', 'Get-FileDownload', 'Get-RobocopyPercent', 'Test-BitsUsable', 'Get-HotpatchBaselineKb', 'Get-PatchTuesdayStart', 'Get-ScheduledTaskArgumentString', 'Get-ScriptCommandLine', 'Get-TextSha256',
         'Resolve-EditionIndexes', 'Search-UpdateCatalog', 'Select-DefaultEditions', 'Select-HotpatchBaselineEntry', 'Test-FidoUrl', 'Test-IsHotpatchBaseline',
         'Test-MicrosoftDownloadUrl', 'Test-RebuildNeeded', 'Test-SameWriteTime', 'Test-UpdatePackageFile'
     )
@@ -372,6 +372,24 @@ Describe 'Get-DismPercent' {
         @{ Line = '' }
     ) {
         Get-DismPercent -Line $Line | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Test-BitsUsable' {
+    It 'allows a signed-in user' {
+        Test-BitsUsable -UserSid 'S-1-5-21-1-2-3-1001' -GroupSids @('S-1-1-0', 'S-1-5-4', 'S-1-5-11') | Should -BeTrue
+    }
+
+    It 'allows <Name>, whose jobs run without anyone signed in' -TestCases @(
+        @{ Name = 'SYSTEM'; Sid = 'S-1-5-18' }
+        @{ Name = 'LOCAL SERVICE'; Sid = 'S-1-5-19' }
+        @{ Name = 'NETWORK SERVICE'; Sid = 'S-1-5-20' }
+    ) {
+        Test-BitsUsable -UserSid $Sid -GroupSids @('S-1-5-6') | Should -BeTrue
+    }
+
+    It 'refuses a scheduled task running as a user who is not signed in' {
+        Test-BitsUsable -UserSid 'S-1-5-21-1-2-3-1001' -GroupSids @('S-1-1-0', 'S-1-5-3', 'S-1-5-11') | Should -BeFalse
     }
 }
 

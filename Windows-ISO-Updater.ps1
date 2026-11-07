@@ -1,6 +1,6 @@
 # GENERATED FILE. Edit the files in src\ and run tools\Build-Script.ps1, because changes made here are overwritten.
 # Windows ISO Updater
-# Version: 2026.11.06.2   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
+# Version: 2026.11.06.3   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
 #
 #region Script overview
 # This script builds a fully up-to-date ("slipstreamed") Windows 11, Windows 10 or Windows Server
@@ -311,7 +311,7 @@ $script:ScriptPath = $PSCommandPath
 
 # Kept in step with the header comment by tools\Update-Version.ps1, and shown in the log and recorded in
 # the build stamp so a finished ISO can be traced back to the exact script that built it.
-$ScriptVersion = '2026.11.06.2'
+$ScriptVersion = '2026.11.06.3'
 
 # A scheduled run has nobody to answer a prompt.
 if ($Scheduled) {
@@ -1105,6 +1105,19 @@ function Copy-LargeFile {
     Write-HostTimestamp ('  Copied {0:N2} GB in {1} ({2:N0} MB/s).' -f ($SourceLength / 1GB), (Format-Duration $Elapsed), $SpeedMB) -ForegroundColor DarkGray
 }
 
+# Whether BITS can transfer anything for this logon session. BITS only moves a job while its owner is logged
+# on interactively (the INTERACTIVE group, which RDP and runas sessions also carry), unless the owner is a
+# service account (SYSTEM, LOCAL SERVICE, NETWORK SERVICE), whose jobs always run. A scheduled task that runs
+# as a named user "whether the user is logged on or not" gets a batch logon instead, and its job just waits.
+function Test-BitsUsable {
+    param(
+        [string]$UserSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value,
+        [string[]]$GroupSids = @([System.Security.Principal.WindowsIdentity]::GetCurrent().Groups | ForEach-Object { $_.Value })
+    )
+    if ($UserSid -in 'S-1-5-18', 'S-1-5-19', 'S-1-5-20') { return $true }
+    return ($GroupSids -contains 'S-1-5-4')
+}
+
 # Downloads a file with BITS when available (resumable, shows progress) and falls back to
 # Invoke-WebRequest. Returns $true on success. Never throws.
 function Get-FileDownload {
@@ -1117,9 +1130,14 @@ function Get-FileDownload {
     $Partial = "$Destination.partial"
     Remove-Item -LiteralPath $Partial -Force -ErrorAction SilentlyContinue
 
-    # Prefer BITS: it is resumable and far more reliable for multi-GB downloads.
-    # Under a scheduled task running as another user, BITS jobs fail to enqueue and this falls through to Invoke-WebRequest below.
-    if (Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue) {
+    # Prefer BITS: it is resumable and far more reliable for multi-GB downloads. Where this logon session
+    # cannot use it, go straight to Invoke-WebRequest below rather than wait on a job that will never start.
+    $UseBits = [bool](Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue)
+    if ($UseBits -and -not (Test-BitsUsable)) {
+        $UseBits = $false
+        Write-HostTimestamp '  BITS only runs for a signed-in user, and this run is a scheduled task for a user who is not signed in, so the file is downloaded directly.' -ForegroundColor DarkGray
+    }
+    if ($UseBits) {
         $Job = $null
         $Progress = $null
         try {
@@ -1138,9 +1156,11 @@ function Get-FileDownload {
                     Update-ProgressLine -State $Progress -Percent ([int][math]::Floor(100 * $Done / $Total)) -Detail $Detail
                 }
                 # BITS keeps retrying a dead connection for days, so give up on one that has gone quiet and
-                # let the direct download below have a go.
+                # let the direct download below have a go. A job that has not received its first byte gets
+                # less time, because one BITS will never run (see Test-BitsUsable) looks just like that.
+                $IdleLimit = if ($Done -gt 0) { 5 } else { 2 }
                 if ($Done -ne $LastBytes) { $LastBytes = $Done; $Idle.Restart() }
-                elseif ($Idle.Elapsed.TotalMinutes -ge 5) { throw "no data arrived for 5 minutes (BITS state: $($Job.JobState))" }
+                elseif ($Idle.Elapsed.TotalMinutes -ge $IdleLimit) { throw "no data arrived for $IdleLimit minutes (BITS state: $($Job.JobState))" }
                 Start-Sleep -Milliseconds 500
             }
             Clear-ProgressLine -State $Progress

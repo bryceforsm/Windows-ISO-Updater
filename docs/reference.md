@@ -118,7 +118,7 @@ Pass `-SkipTattoo` to leave the media untouched. The switch is build-affecting, 
 
 - The **ISO** link is resolved by the third-party **Fido** helper, but only when you pass `-UseFido`. If you prefer not to run external code, supply your own ISO with `-IsoPath` (the default way to work), or use `-UseMct` to get the ISO from Microsoft's own signature-verified Media Creation Tool instead.
 - The **updates** are located by parsing the Microsoft Update Catalog search results and its download dialog (the same technique community tools use), then downloaded directly from Microsoft's update servers.
-- Downloads prefer **BITS** (resumable) and fall back to `Invoke-WebRequest`. Every resolved URL is verified to point at an official Microsoft host (`microsoft.com`, `windowsupdate.com`) over HTTPS before it is downloaded.
+- Downloads prefer **BITS** (resumable) and fall back to `Invoke-WebRequest`. BITS is skipped when the run cannot use it: it only transfers for a signed-in user or a service account, so a scheduled task registered with `-TaskUsername` downloads directly. A task running as SYSTEM still uses BITS. Every resolved URL is verified to point at an official Microsoft host (`microsoft.com`, `windowsupdate.com`) over HTTPS before it is downloaded.
 
 ## Disk Space Requirements
 
