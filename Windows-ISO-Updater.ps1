@@ -1,6 +1,6 @@
 # GENERATED FILE. Edit the files in src\ and run tools\Build-Script.ps1, because changes made here are overwritten.
 # Windows ISO Updater
-# Version: 2026.11.06.5   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
+# Version: 2026.11.06.6   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
 #
 #region Script overview
 # This script builds a fully up-to-date ("slipstreamed") Windows 11, Windows 10 or Windows Server
@@ -311,7 +311,7 @@ $script:ScriptPath = $PSCommandPath
 
 # Kept in step with the header comment by tools\Update-Version.ps1, and shown in the log and recorded in
 # the build stamp so a finished ISO can be traced back to the exact script that built it.
-$ScriptVersion = '2026.11.06.5'
+$ScriptVersion = '2026.11.06.6'
 
 # A scheduled run has nobody to answer a prompt.
 if ($Scheduled) {
@@ -3774,14 +3774,17 @@ function Assert-DismSuccess {
 # Two things are watched once a second. -WatchFile is a file the work writes into, and how much it has grown
 # is shown. -GetPercent is handed each line the program has printed so far, and returns a percentage or
 # $null. Once one turns up the line becomes a bar. Until then it shows -Waiting before the file starts to
-# grow, and -Writing followed by the amount once it does. Returns the exit code and everything the program
-# printed. Anything that cannot be read just leaves the line showing the time taken.
+# grow, and -Writing followed by the amount once it does. -GetStage is handed the same lines and returns a
+# name for a line that starts a new stage of the work, or $null. The name then labels the line, and the bar
+# starts again for that stage. Returns the exit code and everything the program printed. Anything that
+# cannot be read just leaves the line showing the time taken.
 function Invoke-WatchedProcess {
     param(
         [Parameter(Mandatory)][string]$FilePath,
         [Parameter(Mandatory)][string]$Arguments,
         [string]$WatchFile,
         [scriptblock]$GetPercent,
+        [scriptblock]$GetStage,
         [string]$Waiting = 'Working',
         [string]$Writing = 'Writing',
         [int]$Indent = 0
@@ -3795,14 +3798,20 @@ function Invoke-WatchedProcess {
     $ReadFrom = [long]0
     $Pending = ''
     $Percent = $null
+    $Stage = $null
+    $StageFrom = [long]0
     try {
         $Proc = Start-Process -FilePath $FilePath -ArgumentList $Arguments -NoNewWindow -PassThru -RedirectStandardOutput $OutFile -RedirectStandardError $ErrFile -ErrorAction Stop
         # Read once now, because without the handle the exit code can come back empty once the process is gone.
         $null = $Proc.Handle
         while (-not $Proc.WaitForExit(1000)) {
+            $Written = [long]0
+            if ($null -ne $StartSize) {
+                try { $Written = [long](Get-Item -LiteralPath $WatchFile -ErrorAction Stop).Length - $StartSize } catch { }
+            }
             # Whatever the program has printed since the last look. The last piece may be a line still being
             # written, so it is held back until the next look completes it.
-            if ($GetPercent) {
+            if ($GetPercent -or $GetStage) {
                 try {
                     $Stream = [System.IO.File]::Open($OutFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
                     try {
@@ -3816,24 +3825,35 @@ function Invoke-WatchedProcess {
                     $Pieces = ($Pending + [System.Text.Encoding]::ASCII.GetString($Bytes, 0, $Count).Replace([string][char]0, '')) -split '[\r\n]'
                     $Pending = $Pieces[-1]
                     for ($i = 0; $i -lt $Pieces.Count - 1; $i++) {
-                        $Found = & $GetPercent $Pieces[$i]
+                        # A new stage starts its own bar from 0%, so the last stage's percentage is dropped, and
+                        # from the second stage on, only what that stage itself writes is counted.
+                        $NewStage = if ($GetStage) { & $GetStage $Pieces[$i] } else { $null }
+                        if ($NewStage -and $NewStage -ne $Stage) {
+                            if ($Stage) { $StageFrom = $Written }
+                            $Stage = $NewStage
+                            $Percent = $null
+                            continue
+                        }
+                        $Found = if ($GetPercent) { & $GetPercent $Pieces[$i] } else { $null }
                         if ($null -ne $Found) { $Percent = $Found }
                     }
                 }
                 catch { }
             }
             $Elapsed = Format-Duration ((Get-Date) - $Progress.Start)
-            $Written = 0
-            if ($null -ne $StartSize) {
-                try { $Written = [long](Get-Item -LiteralPath $WatchFile -ErrorAction Stop).Length - $StartSize } catch { }
-            }
-            $Amount = if ($Written -ge 1GB) { '{0:N2} GB' -f ($Written / 1GB) } elseif ($Written -ge 1MB) { '{0:N0} MB' -f ($Written / 1MB) } else { $null }
+            $Grown = $Written - $StageFrom
+            $Amount = if ($Grown -ge 1GB) { '{0:N2} GB' -f ($Grown / 1GB) } elseif ($Grown -ge 1MB) { '{0:N0} MB' -f ($Grown / 1MB) } else { $null }
             if ($null -ne $Percent) {
-                $Detail = if ($Amount) { "$Amount written, $Elapsed" } else { $Elapsed }
+                $Detail = if ($Stage -and $Amount) { "${Stage}: $Amount written, $Elapsed" }
+                          elseif ($Stage) { "$Stage, $Elapsed" }
+                          elseif ($Amount) { "$Amount written, $Elapsed" }
+                          else { $Elapsed }
                 Update-ProgressLine -State $Progress -Percent $Percent -Detail $Detail
             }
             else {
-                $Detail = if ($Amount) { "${Writing}: $Amount so far ($Elapsed)" } else { "$Waiting ($Elapsed)" }
+                $Label = if ($Stage) { $Stage } else { $null }
+                $Detail = if ($Amount) { "$(if ($Label) { $Label } else { $Writing }): $Amount so far ($Elapsed)" }
+                          else { "$(if ($Label) { $Label } else { $Waiting }) ($Elapsed)" }
                 Update-ProgressLine -State $Progress -Percent -1 -Detail $Detail
             }
         }
@@ -3868,11 +3888,12 @@ function Export-WimImage {
 # Dismount-WindowsImage -Save, through dism.exe. Throws if DISM fails, leaving the image mounted for the
 # caller's own discard-and-recover handling, as the cmdlet did.
 #
-# DISM says nothing for the first part of a commit, often minutes, while it scans the mounted image, and only
-# reports a percentage once it starts writing. So it runs in the background with the image file it commits
-# to watched as well: the .wim grows as the changed files are written back into it. The line shows
-# "Preparing" during the scan, how much has been written once the file grows, and DISM's own bar as soon as
-# it reports one.
+# DISM says nothing for the first part of a commit, often minutes, while it scans the mounted image. Then it
+# runs two stages, each with its own bar from 0 to 100%: "Saving image", which writes the changes into the
+# .wim, and "Unmounting image". So it runs in the background with the image file it commits to watched as
+# well, since the .wim grows as the changes are written back into it. The line shows "Preparing" during the
+# scan, how much has been written once the file grows, and DISM's own bar, named for its stage, as soon as
+# it reports one. /English keeps the stage names recognisable on a Windows in another language.
 function Save-MountedImage {
     param(
         [Parameter(Mandatory)][string]$Path,
@@ -3884,7 +3905,13 @@ function Save-MountedImage {
         if ($Mounted) { $ImagePath = $Mounted.ImagePath }
     }
     catch { }   # without it the line still shows the time taken
-    $Result = Invoke-WatchedProcess -FilePath 'dism.exe' -Arguments "/Unmount-Image /MountDir:`"$($Path.TrimEnd('\'))`" /Commit" -WatchFile $ImagePath -GetPercent { param($Line) Get-DismPercent -Line $Line } -Waiting 'Preparing the commit' -Writing 'Writing the image' -Indent $Indent
+    $Result = Invoke-WatchedProcess -FilePath 'dism.exe' -Arguments "/English /Unmount-Image /MountDir:`"$($Path.TrimEnd('\'))`" /Commit" -WatchFile $ImagePath -GetPercent { param($Line) Get-DismPercent -Line $Line } -GetStage {
+        param($Line)
+        switch -Regex ($Line) {
+            '^\s*Saving image' { 'Saving the image' }
+            '^\s*Unmounting image' { 'Unmounting' }
+        }
+    } -Waiting 'Preparing the commit' -Writing 'Writing the image' -Indent $Indent
     Assert-DismSuccess -Output $Result.Output -ExitCode $Result.ExitCode -FailureMessage "Could not commit and unmount the image at $Path"
 }
 

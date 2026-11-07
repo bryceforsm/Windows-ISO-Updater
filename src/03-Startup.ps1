@@ -6,7 +6,7 @@ $script:ScriptPath = $PSCommandPath
 
 # Kept in step with the header comment by tools\Update-Version.ps1, and shown in the log and recorded in
 # the build stamp so a finished ISO can be traced back to the exact script that built it.
-$ScriptVersion = '2026.11.06.5'
+$ScriptVersion = '2026.11.06.6'
 
 # A scheduled run has nobody to answer a prompt.
 if ($Scheduled) {
