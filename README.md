@@ -8,7 +8,7 @@ Installing Windows from this updated media saves time by eliminating large post-
 
 ## Key Features
 
-* **Safe Execution**: All servicing happens inside a working folder (`C:\WISO-Work` by default), never on the running Windows. Outside that folder it only changes the host when asked to, with `-InstallAdk` or `-RegisterScheduledTask`, or if a mount cannot be released, when it registers a boot task that clears the mount and deletes itself.
+* **Safe Execution**: All servicing happens inside a working folder (`C:\WISO-Work` by default), never on the running Windows. Outside that folder it only changes the host when asked to, with `-InstallAdk`, `-RegisterScheduledTask` or `-ExcludeWorkPathFromDefender` (a Defender exclusion for the working folder that is removed when the run ends), or if a mount cannot be released, when it registers a boot task that clears the mount and deletes itself.
 * **No Manual ADK Setup Needed**: Automatically fetches a verified copy of `oscdimg.exe` from Microsoft servers to compile the media.
 * **Official Sources by Default**: Downloads packages directly from Microsoft endpoints over HTTPS. The one exception is the optional `-UseFido` ISO download, which fetches a community helper from GitHub, pinned by hash.
 * **Windows Server Support**: Compatible with Windows Server media, detected automatically from the image.

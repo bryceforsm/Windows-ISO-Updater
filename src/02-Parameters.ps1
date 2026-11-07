@@ -75,6 +75,9 @@ param(
     [Parameter(HelpMessage = 'Use Fast WIM compression instead of Max when exporting install.wim, boot.wim, or converting install.esd. Builds faster with a slightly larger output WIM. Has no effect when -CompressEsd is active.')]
     [switch]$FastCompression,
 
+    [Parameter(HelpMessage = 'Exclude the working folder from Microsoft Defender real-time scanning while the build runs, which speeds up every DISM step. The exclusion is removed when the run ends, however it ends, and one that was already there is left alone. Nothing in the working folder is scanned while it is in place')]
+    [switch]$ExcludeWorkPathFromDefender,
+
     [Parameter(HelpMessage = 'Path to an unattended answer file to place on the finished ISO as \autounattend.xml, so Windows Setup runs without prompting')]
     [string]$UnattendPath,
 

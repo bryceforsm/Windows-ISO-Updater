@@ -10,7 +10,7 @@ error, and function rules apply to everything under `tools/` as well.
 
 **Source files.** Edit `src/`, then run `tools/Build-Script.ps1`. `Windows-ISO-Updater.ps1` is generated, so
 an edit made there is lost. The number in a file's name sets its position in the script: `01` to `03` are
-the header, parameters and startup, `10` to `25` the functions by topic, and `30` to `38` the main flow in
+the header, parameters and startup, `10` to `26` the functions by topic, and `30` to `38` the main flow in
 run order. A new file only needs a name that sorts into the right place.
 
 **Layout.** Sections are wrapped in `#region Section Name` / `#endregion` so they fold in VS Code. Order
@@ -42,6 +42,12 @@ change how the log renders. Never pick a color for looks.
 | DarkGray | Supporting detail, timings, catalog results |
 
 Sub-items are indented two spaces inside the string itself. Durations go through `Format-Duration`.
+
+For a wait longer than a few seconds, show a progress line: `New-ProgressLine`, then `Update-ProgressLine`
+as the work moves, then `Clear-ProgressLine` in a `finally`. It redraws one console line in place, stays out
+of the transcript and the CMTrace log, and does nothing when output is redirected. Never use `Write-Progress`,
+which `$ProgressPreference` hides for the whole run. Run `dism.exe` through `Invoke-Dism` so its progress
+shows, and pass `-FailureMessage` where the call must throw on failure.
 
 **Steps.** Wrap any meaningful unit of work in `Invoke-Task`. It prints the description, times the block
 in a `finally`, and appends to `$script:StepTimings` for the summary table at the end.

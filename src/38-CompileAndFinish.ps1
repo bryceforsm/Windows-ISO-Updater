@@ -226,6 +226,7 @@ if ($FailedServicing.Count -gt 0 -or $script:ServicingFailures -gt 0) {
 Write-HostLog 'You can write it to a USB drive (e.g. with Rufus) or use it for a clean install or in-place upgrade.'
 Write-Host $LineBreak
 
+Remove-WorkPathDefenderExclusion
 Write-HostTimestamp 'Windows ISO Updater script finished.' -ForegroundColor Green
 if (-not $Unattended -and -not $SkipInteractive) {
     Read-Host -Prompt 'Press enter to exit'

@@ -1,4 +1,202 @@
 #region Image servicing
+# The percentage on one of DISM's progress-bar lines, such as "[=====      10.0%      ]", or $null for any
+# other line. A comma is allowed as the decimal mark, because DISM formats it in the system's own locale.
+function Get-DismPercent {
+    param([string]$Line)
+    if ($Line -notmatch '^\s*\[[=\s]*(\d{1,3})(?:[.,]\d+)?%[=\s]*\]\s*$') { return $null }
+    return [math]::Min(100, [int]$Matches[1])
+}
+
+# Runs dism.exe and returns everything it printed, leaving $LASTEXITCODE as DISM set it. DISM redraws its
+# progress bar with carriage returns, and PowerShell hands each redraw over as a line of its own, so the
+# percentage is read off as it goes and shown on a progress line (see New-ProgressLine).
+#
+# With -FailureMessage it stands in for a DISM cmdlet called with -ErrorAction Stop: any exit code other than
+# success or "restart needed" throws, with that message followed by DISM's error code and its own words.
+function Invoke-Dism {
+    param(
+        [Parameter(Mandatory)][string[]]$ArgumentList,
+        [int]$Indent = 28,
+        [string]$FailureMessage
+    )
+
+    $Progress = New-ProgressLine -Indent $Indent
+    try {
+        $Output = & dism.exe @ArgumentList 2>&1 | ForEach-Object {
+            $Line = "$_"
+            $Percent = Get-DismPercent -Line $Line
+            if ($null -ne $Percent) { Update-ProgressLine -State $Progress -Percent $Percent }
+            $Line
+        }
+    }
+    finally { Clear-ProgressLine -State $Progress }
+
+    if ($FailureMessage) { Assert-DismSuccess -Output $Output -ExitCode $LASTEXITCODE -FailureMessage $FailureMessage }
+    return $Output
+}
+
+# Throws unless DISM ended in success or "restart needed", with the message followed by DISM's error code
+# and its own account of what went wrong.
+function Assert-DismSuccess {
+    param(
+        [object[]]$Output,
+        [int]$ExitCode,
+        [Parameter(Mandatory)][string]$FailureMessage
+    )
+    if ($ExitCode -eq 0 -or $ExitCode -eq 3010) { return }
+    $Code = Get-DismErrorCode -Output $Output -ExitCode $ExitCode
+    $Said = (@(Get-DismMessage -Output $Output) | Where-Object { $_ -notmatch '^Error:\s*0x' }) -join ' '
+    throw "$FailureMessage (DISM error $Code)$(if ($Said) { ": $Said" })"
+}
+
+# Runs a program in the background and, while it works, shows how far it has got. For work that can go quiet
+# for minutes at a time, so a line read from its output alone would sit still: a DISM commit says nothing
+# while it scans the mounted image, and only reports a percentage once it starts writing.
+#
+# Two things are watched once a second. -WatchFile is a file the work writes into, and how much it has grown
+# is shown. -GetPercent is handed each line the program has printed so far, and returns a percentage or
+# $null. Once one turns up the line becomes a bar. Until then it shows -Waiting before the file starts to
+# grow, and -Writing followed by the amount once it does. -GetStage is handed the same lines and returns a
+# name for a line that starts a new stage of the work, or $null. The name then labels the line, and the bar
+# starts again for that stage. Returns the exit code and everything the program printed. Anything that
+# cannot be read just leaves the line showing the time taken.
+function Invoke-WatchedProcess {
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [Parameter(Mandatory)][string]$Arguments,
+        [string]$WatchFile,
+        [scriptblock]$GetPercent,
+        [scriptblock]$GetStage,
+        [string]$Waiting = 'Working',
+        [string]$Writing = 'Writing',
+        [int]$Indent = 0
+    )
+
+    $StartSize = $null
+    if ($WatchFile -and (Test-Path -LiteralPath $WatchFile -PathType Leaf)) { $StartSize = (Get-Item -LiteralPath $WatchFile).Length }
+    $OutFile = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath ('wiso_' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.out')
+    $ErrFile = "$OutFile.err"
+    $Progress = New-ProgressLine -Indent $Indent
+    $ReadFrom = [long]0
+    $Pending = ''
+    $Percent = $null
+    $Stage = $null
+    $StageFrom = [long]0
+    try {
+        $Proc = Start-Process -FilePath $FilePath -ArgumentList $Arguments -NoNewWindow -PassThru -RedirectStandardOutput $OutFile -RedirectStandardError $ErrFile -ErrorAction Stop
+        # Read once now, because without the handle the exit code can come back empty once the process is gone.
+        $null = $Proc.Handle
+        while (-not $Proc.WaitForExit(1000)) {
+            $Written = [long]0
+            if ($null -ne $StartSize) {
+                try { $Written = [long](Get-Item -LiteralPath $WatchFile -ErrorAction Stop).Length - $StartSize } catch { }
+            }
+            # Whatever the program has printed since the last look. The last piece may be a line still being
+            # written, so it is held back until the next look completes it.
+            if ($GetPercent -or $GetStage) {
+                try {
+                    $Stream = [System.IO.File]::Open($OutFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+                    try {
+                        [void]$Stream.Seek($ReadFrom, [System.IO.SeekOrigin]::Begin)
+                        $Bytes = New-Object byte[] ([int][math]::Min(1MB, $Stream.Length - $ReadFrom))
+                        $Count = $Stream.Read($Bytes, 0, $Bytes.Length)
+                        $ReadFrom += $Count
+                    }
+                    finally { $Stream.Dispose() }
+                    # A program writing UTF-16 leaves a NUL after every character, which would hide the digits.
+                    $Pieces = ($Pending + [System.Text.Encoding]::ASCII.GetString($Bytes, 0, $Count).Replace([string][char]0, '')) -split '[\r\n]'
+                    $Pending = $Pieces[-1]
+                    for ($i = 0; $i -lt $Pieces.Count - 1; $i++) {
+                        # A new stage starts its own bar from 0%, so the last stage's percentage is dropped, and
+                        # from the second stage on, only what that stage itself writes is counted.
+                        $NewStage = if ($GetStage) { & $GetStage $Pieces[$i] } else { $null }
+                        if ($NewStage -and $NewStage -ne $Stage) {
+                            if ($Stage) { $StageFrom = $Written }
+                            $Stage = $NewStage
+                            $Percent = $null
+                            continue
+                        }
+                        $Found = if ($GetPercent) { & $GetPercent $Pieces[$i] } else { $null }
+                        if ($null -ne $Found) { $Percent = $Found }
+                    }
+                }
+                catch { }
+            }
+            $Elapsed = Format-Duration ((Get-Date) - $Progress.Start)
+            $Grown = $Written - $StageFrom
+            $Amount = if ($Grown -ge 1GB) { '{0:N2} GB' -f ($Grown / 1GB) } elseif ($Grown -ge 1MB) { '{0:N0} MB' -f ($Grown / 1MB) } else { $null }
+            if ($null -ne $Percent) {
+                $Detail = if ($Stage -and $Amount) { "${Stage}: $Amount written, $Elapsed" }
+                          elseif ($Stage) { "$Stage, $Elapsed" }
+                          elseif ($Amount) { "$Amount written, $Elapsed" }
+                          else { $Elapsed }
+                Update-ProgressLine -State $Progress -Percent $Percent -Detail $Detail
+            }
+            else {
+                $Label = if ($Stage) { $Stage } else { $null }
+                $Detail = if ($Amount) { "$(if ($Label) { $Label } else { $Writing }): $Amount so far ($Elapsed)" }
+                          else { "$(if ($Label) { $Label } else { $Waiting }) ($Elapsed)" }
+                Update-ProgressLine -State $Progress -Percent -1 -Detail $Detail
+            }
+        }
+        $Proc.WaitForExit()
+        return [pscustomobject]@{
+            ExitCode = $Proc.ExitCode
+            Output   = @(Get-Content -LiteralPath $OutFile, $ErrFile -ErrorAction SilentlyContinue)
+        }
+    }
+    finally {
+        Clear-ProgressLine -State $Progress
+        Remove-Item -LiteralPath $OutFile, $ErrFile -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# Export-WindowsImage, run through dism.exe so its progress can be shown. Throws if DISM fails.
+function Export-WimImage {
+    param(
+        [Parameter(Mandatory)][string]$SourceImagePath,
+        [Parameter(Mandatory)][int]$SourceIndex,
+        [Parameter(Mandatory)][string]$DestinationImagePath,
+        [ValidateSet('None', 'Fast', 'Max', 'Recovery')][string]$CompressionType = 'Max',
+        [switch]$Setbootable,
+        [int]$Indent = 24
+    )
+    $Arguments = @('/Export-Image', "/SourceImageFile:$SourceImagePath", "/SourceIndex:$SourceIndex",
+        "/DestinationImageFile:$DestinationImagePath", "/Compress:$($CompressionType.ToLowerInvariant())")
+    if ($Setbootable) { $Arguments += '/Bootable' }
+    Invoke-Dism -ArgumentList $Arguments -Indent $Indent -FailureMessage "Could not export index $SourceIndex of $(Split-Path -Leaf $SourceImagePath)" | Out-Null
+}
+
+# Dismount-WindowsImage -Save, through dism.exe. Throws if DISM fails, leaving the image mounted for the
+# caller's own discard-and-recover handling, as the cmdlet did.
+#
+# DISM says nothing for the first part of a commit, often minutes, while it scans the mounted image. Then it
+# runs two stages, each with its own bar from 0 to 100%: "Saving image", which writes the changes into the
+# .wim, and "Unmounting image". So it runs in the background with the image file it commits to watched as
+# well, since the .wim grows as the changes are written back into it. The line shows "Preparing" during the
+# scan, how much has been written once the file grows, and DISM's own bar, named for its stage, as soon as
+# it reports one. /English keeps the stage names recognisable on a Windows in another language.
+function Save-MountedImage {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [int]$Indent = 26
+    )
+    $ImagePath = $null
+    try {
+        $Mounted = Get-WindowsImage -Mounted -ErrorAction Stop | Where-Object { "$($_.Path)".TrimEnd('\') -eq $Path.TrimEnd('\') } | Select-Object -First 1
+        if ($Mounted) { $ImagePath = $Mounted.ImagePath }
+    }
+    catch { }   # without it the line still shows the time taken
+    $Result = Invoke-WatchedProcess -FilePath 'dism.exe' -Arguments "/English /Unmount-Image /MountDir:`"$($Path.TrimEnd('\'))`" /Commit" -WatchFile $ImagePath -GetPercent { param($Line) Get-DismPercent -Line $Line } -GetStage {
+        param($Line)
+        switch -Regex ($Line) {
+            '^\s*Saving image' { 'Saving the image' }
+            '^\s*Unmounting image' { 'Unmounting' }
+        }
+    } -Waiting 'Preparing the commit' -Writing 'Writing the image' -Indent $Indent
+    Assert-DismSuccess -Output $Result.Output -ExitCode $Result.ExitCode -FailureMessage "Could not commit and unmount the image at $Path"
+}
+
 # Pulls the servicing stack update out of a combined SSU+LCU .msu and applies it on its own. Windows rejects
 # a cumulative update with 0x800F0823 when the image's stack is older than the update needs, and DISM does
 # not always take the stack out of the combined package by itself when servicing offline.
@@ -32,7 +230,7 @@ function Add-ServicingStack {
         }
 
         Write-HostTimestamp "      Applying the bundled servicing stack update first: $($Ssu.Name)" -ForegroundColor DarkYellow
-        & dism.exe "/Image:$MountDir" '/Add-Package' "/PackagePath:$($Ssu.FullName)" @LogArgs | Out-Null
+        Invoke-Dism -ArgumentList (@("/Image:$MountDir", '/Add-Package', "/PackagePath:$($Ssu.FullName)") + $LogArgs) | Out-Null
         if ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq 3010) {
             Write-HostTimestamp '      Servicing stack updated.' -ForegroundColor Green
             return $true
@@ -208,7 +406,7 @@ function Add-UpdateGroup {
         # servicing stack, a momentary I/O hiccup) often clear on a second attempt.
         $MaxAttempts = 2
         for ($Attempt = 1; $Attempt -le $MaxAttempts; $Attempt++) {
-            $Output = & dism.exe "/Image:$MountDir" '/Add-Package' "/PackagePath:$Target" "/LogPath:$DismLog" 2>&1
+            $Output = Invoke-Dism -ArgumentList "/Image:$MountDir", '/Add-Package', "/PackagePath:$Target", "/LogPath:$DismLog"
             $ExitCode = $LASTEXITCODE
 
             if ($ExitCode -eq 0 -or $ExitCode -eq 3010) {
@@ -232,7 +430,7 @@ function Add-UpdateGroup {
         # until the image's servicing stack is brought forward.
         if (($Output -match '0x800f0823') -and (Add-ServicingStack -MountDir $MountDir -PackagePath $Target -StageDir $Stage -LogPath $DismLog)) {
             Write-HostTimestamp '      Retrying the update now the servicing stack is current...' -ForegroundColor DarkYellow
-            $Output = & dism.exe "/Image:$MountDir" '/Add-Package' "/PackagePath:$Target" "/LogPath:$DismLog" 2>&1
+            $Output = Invoke-Dism -ArgumentList "/Image:$MountDir", '/Add-Package', "/PackagePath:$Target", "/LogPath:$DismLog"
             $ExitCode = $LASTEXITCODE
             if ($ExitCode -eq 0 -or $ExitCode -eq 3010) {
                 Write-HostTimestamp '      Applied.' -ForegroundColor Green
@@ -445,7 +643,7 @@ function Optimize-WinReImage {
         Write-HostTimestamp '      Re-exporting the recovery image to shrink it...'
         # Always Max, never -FastCompression: this image has to fit a fixed recovery partition, and at a few
         # hundred MB the compression time is irrelevant next to install.wim.
-        Export-WindowsImage -SourceImagePath $WinReWim -SourceIndex 1 -DestinationImagePath $Temp -CompressionType Max -ErrorAction Stop | Out-Null
+        Export-WimImage -SourceImagePath $WinReWim -SourceIndex 1 -DestinationImagePath $Temp -CompressionType Max -Indent 28
         Set-ItemProperty -LiteralPath $WinReWim -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
         # Copied rather than moved, because the destination lives inside a DISM projection of install.wim.
         Copy-Item -LiteralPath $Temp -Destination $WinReWim -Force -ErrorAction Stop

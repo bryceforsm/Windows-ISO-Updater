@@ -1,6 +1,13 @@
 
 $WimCompression = if ($FastCompression) { 'Fast' } else { 'Max' }
 
+# Added here, at the first heavy disk work, rather than at startup, so a run that stops early (nothing has
+# changed, -CheckOnly, -ListEditions) never changes Defender's settings at all.
+if ($ExcludeWorkPathFromDefender) {
+    Add-WorkPathDefenderExclusion -Path $WorkRoot
+    Write-Host $LineBreak
+}
+
 #region Extract the ISO to the working folder
 $MountedImage = $null
 try {
@@ -109,7 +116,7 @@ if (-not (Test-Path -LiteralPath $InstallWimExtracted) -and (Test-Path -LiteralP
             $Img = $Images | Where-Object { [int]$_.ImageIndex -eq [int]$Want } | Select-Object -First 1
             if (-not $Img) { continue }
             Write-HostTimestamp "  Exporting index $($Img.ImageIndex): $($Img.ImageName) ..."
-            Export-WindowsImage -SourceImagePath $InstallEsdExtracted -SourceIndex $Img.ImageIndex -DestinationImagePath $InstallWimExtracted -CompressionType $WimCompression -ErrorAction Stop | Out-Null
+            Export-WimImage -SourceImagePath $InstallEsdExtracted -SourceIndex $Img.ImageIndex -DestinationImagePath $InstallWimExtracted -CompressionType $WimCompression
         }
         Remove-Item -LiteralPath $InstallEsdExtracted -Force -ErrorAction SilentlyContinue
         Write-HostTimestamp '  Conversion complete.' -ForegroundColor Green

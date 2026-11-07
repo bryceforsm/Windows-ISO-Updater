@@ -1,4 +1,11 @@
 #region Downloads
+# The percentage on one of robocopy's progress lines, such as "  12.5%", or $null for any other line.
+function Get-RobocopyPercent {
+    param([string]$Line)
+    if ($Line -notmatch '^\s*(\d{1,3})(?:[.,]\d+)?%\s*$') { return $null }
+    return [math]::Min(100, [int]$Matches[1])
+}
+
 # Moves one multi-GB file with robocopy, which retries a share that blips and whose /J unbuffered mode is
 # measurably faster than Copy-Item over SMB. /COPY:DAT is the important part: it takes data, attributes and
 # timestamps only, deliberately leaving out S (the ACL), O (the owner) and U (auditing), so a file landing
@@ -23,9 +30,23 @@ function Copy-LargeFile {
             if ($Value -match '^[A-Za-z]:$') { $Value += '\' }
             Set-Variable -Name $Name -Value $Value
         }
+        # No /NP or /NFL, because robocopy only reports its percentage with both left off. The percentage lines
+        # drive the progress line and are dropped, so the output kept for an error message stays short.
         $RoboArgs = @($SourceDir, $TargetDir, (Split-Path -Leaf $Path),
-            '/COPY:DAT', '/J', '/R:2', '/W:5', '/NP', '/NJH', '/NJS', '/NFL', '/NDL')
-        $RoboOutput = & robocopy.exe @RoboArgs 2>&1
+            '/COPY:DAT', '/J', '/R:2', '/W:5', '/NJH', '/NJS', '/NDL')
+        $Progress = New-ProgressLine -Indent 24
+        try {
+            $RoboOutput = & robocopy.exe @RoboArgs 2>&1 | ForEach-Object {
+                $Line = "$_"
+                $Percent = Get-RobocopyPercent -Line $Line
+                if ($null -eq $Percent) { $Line }
+                elseif ($Percent -ne $Progress.Percent) {
+                    $Detail = Format-ByteProgress -Done ([long]($SourceLength * $Percent / 100)) -Total $SourceLength -Elapsed ((Get-Date) - $Started)
+                    Update-ProgressLine -State $Progress -Percent $Percent -Detail $Detail
+                }
+            }
+        }
+        finally { Clear-ProgressLine -State $Progress }
         # robocopy counts anything under 8 as success (0 is "already identical", 1 is "copied").
         if ($LASTEXITCODE -ge 8) {
             $Detail = (@($RoboOutput) | ForEach-Object { "$_".Trim() } | Where-Object { $_ }) -join ' '
@@ -48,6 +69,19 @@ function Copy-LargeFile {
     Write-HostTimestamp ('  Copied {0:N2} GB in {1} ({2:N0} MB/s).' -f ($SourceLength / 1GB), (Format-Duration $Elapsed), $SpeedMB) -ForegroundColor DarkGray
 }
 
+# Whether BITS can transfer anything for this logon session. BITS only moves a job while its owner is logged
+# on interactively (the INTERACTIVE group, which RDP and runas sessions also carry), unless the owner is a
+# service account (SYSTEM, LOCAL SERVICE, NETWORK SERVICE), whose jobs always run. A scheduled task that runs
+# as a named user "whether the user is logged on or not" gets a batch logon instead, and its job just waits.
+function Test-BitsUsable {
+    param(
+        [string]$UserSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value,
+        [string[]]$GroupSids = @([System.Security.Principal.WindowsIdentity]::GetCurrent().Groups | ForEach-Object { $_.Value })
+    )
+    if ($UserSid -in 'S-1-5-18', 'S-1-5-19', 'S-1-5-20') { return $true }
+    return ($GroupSids -contains 'S-1-5-4')
+}
+
 # Downloads a file with BITS when available (resumable, shows progress) and falls back to
 # Invoke-WebRequest. Returns $true on success. Never throws.
 function Get-FileDownload {
@@ -60,18 +94,57 @@ function Get-FileDownload {
     $Partial = "$Destination.partial"
     Remove-Item -LiteralPath $Partial -Force -ErrorAction SilentlyContinue
 
-    # Prefer BITS: it is resumable and far more reliable for multi-GB downloads.
-    # Under a scheduled task running as another user, BITS jobs fail to enqueue and this falls through to Invoke-WebRequest below.
-    if (Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue) {
+    # Prefer BITS: it is resumable and far more reliable for multi-GB downloads. Where this logon session
+    # cannot use it, go straight to Invoke-WebRequest below rather than wait on a job that will never start.
+    $UseBits = [bool](Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue)
+    if ($UseBits -and -not (Test-BitsUsable)) {
+        $UseBits = $false
+        Write-HostTimestamp '  BITS only runs for a signed-in user, and this run is a scheduled task for a user who is not signed in, so the file is downloaded directly.' -ForegroundColor DarkGray
+    }
+    if ($UseBits) {
+        $Job = $null
+        $Progress = $null
         try {
             Write-HostTimestamp '  Downloading with BITS...'
-            Start-BitsTransfer -Source $Url -Destination $Partial -Description 'Windows download' -ErrorAction Stop
+            # Started in the background and polled, so the bytes transferred can be shown as it goes.
+            $Job = Start-BitsTransfer -Source $Url -Destination $Partial -Description 'Windows download' -Asynchronous -ErrorAction Stop
+            $Progress = New-ProgressLine -Indent 24
+            $LastBytes = [long]-1
+            $Idle = [System.Diagnostics.Stopwatch]::StartNew()
+            while ($Job.JobState -in 'Queued', 'Connecting', 'Transferring', 'TransientError') {
+                $Done = [long]$Job.BytesTransferred
+                $Total = $Job.BytesTotal
+                # The total reads as the largest 64-bit number until the server has said how big the file is.
+                if ($Total -gt 0 -and $Total -lt [uint64]::MaxValue) {
+                    $Detail = Format-ByteProgress -Done $Done -Total ([long]$Total) -Elapsed ((Get-Date) - $Progress.Start)
+                    Update-ProgressLine -State $Progress -Percent ([int][math]::Floor(100 * $Done / $Total)) -Detail $Detail
+                }
+                # BITS keeps retrying a dead connection for days, so give up on one that has gone quiet and
+                # let the direct download below have a go. A job that has not received its first byte gets
+                # less time, because one BITS will never run (see Test-BitsUsable) looks just like that.
+                $IdleLimit = if ($Done -gt 0) { 5 } else { 2 }
+                if ($Done -ne $LastBytes) { $LastBytes = $Done; $Idle.Restart() }
+                elseif ($Idle.Elapsed.TotalMinutes -ge $IdleLimit) { throw "no data arrived for $IdleLimit minutes (BITS state: $($Job.JobState))" }
+                Start-Sleep -Milliseconds 500
+            }
+            Clear-ProgressLine -State $Progress
+            if ($Job.JobState -ne 'Transferred') { throw "the job stopped in state $($Job.JobState): $("$($Job.ErrorDescription)".Trim())" }
+            Complete-BitsTransfer -BitsJob $Job -ErrorAction Stop
+            $Job = $null
             Move-Item -LiteralPath $Partial -Destination $Destination -Force -ErrorAction Stop
             return $true
         }
         catch {
+            if ($Progress) { Clear-ProgressLine -State $Progress }
+            if ($Job) { Remove-BitsTransfer -BitsJob $Job -ErrorAction SilentlyContinue; $Job = $null }
             Write-HostTimestamp "  BITS transfer failed ($($_.Exception.Message)). Falling back to a direct download..." -ForegroundColor Yellow
             Remove-Item -LiteralPath $Partial -Force -ErrorAction SilentlyContinue
+        }
+        finally {
+            # Reached with a job still set only when the run is stopped mid-download (Ctrl+C), which would
+            # otherwise leave BITS fetching a file nobody will collect.
+            if ($Progress) { Clear-ProgressLine -State $Progress }
+            if ($Job) { Remove-BitsTransfer -BitsJob $Job -ErrorAction SilentlyContinue }
         }
     }
 

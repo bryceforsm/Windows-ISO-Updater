@@ -35,7 +35,7 @@ function New-RecoveryIso {
     }
 
     Write-HostTimestamp '  Placing the recovery image where the media boots from (sources\boot.wim)...'
-    Export-WindowsImage -SourceImagePath $WinReWim -SourceIndex 1 -DestinationImagePath (Join-Path $RecoveryRoot 'sources\boot.wim') -CompressionType Max -Setbootable -ErrorAction Stop | Out-Null
+    Export-WimImage -SourceImagePath $WinReWim -SourceIndex 1 -DestinationImagePath (Join-Path $RecoveryRoot 'sources\boot.wim') -CompressionType Max -Setbootable
 
     $Re = Get-WinReVersion -WinReWim $WinReWim
     $WindowsTag =
@@ -113,6 +113,5 @@ function Remove-StaleRecoveryIso {
     if ($Removed -eq 0) { Write-HostTimestamp '  No old recovery ISOs to remove.' -ForegroundColor DarkGray }
     return [pscustomobject]@{ Removed = $Removed; FreedMB = $FreedMB }
 }
-#endregion
 #endregion
 

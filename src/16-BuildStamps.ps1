@@ -14,6 +14,7 @@ function Get-Sha256 {
     $BufferSize = 4MB
     $Algorithm = $null
     $Stream = $null
+    $Progress = $null
     try {
         $Length = (Get-Item -LiteralPath $Path -ErrorAction Stop).Length
         # On .NET Framework the base factory hands back the managed implementation, so ask for the
@@ -32,13 +33,21 @@ function Get-Sha256 {
         $Done = [long]0
         $NextPercent = 20
         $Timer = [System.Diagnostics.Stopwatch]::StartNew()
+        # Reported only for the multi-gigabyte ISOs, where a slow source can make this take minutes. On a
+        # console that is a progress line. Without one (a scheduled run), a line every 20% goes to the
+        # transcript instead, so its log still shows the hash moving.
+        if ($ShowProgress -and $Length -gt 1GB) { $Progress = New-ProgressLine -Indent 24 }
         while (($Count = $Stream.Read($Buffer, 0, $Buffer.Length)) -gt 0) {
             [void]$Algorithm.TransformBlock($Buffer, 0, $Count, $null, 0)
             $Done += $Count
-            # Reported only for the multi-gigabyte ISOs, where a slow source can make this take minutes.
-            if ($ShowProgress -and $Length -gt 1GB) {
-                $Percent = [int](100 * $Done / $Length)
-                if ($Percent -ge $NextPercent -and $Timer.Elapsed.TotalSeconds -gt 0) {
+            if ($Progress) {
+                $Percent = [int][math]::Floor(100 * $Done / $Length)
+                if ($Progress.Width -gt 0) {
+                    if ($Percent -ne $Progress.Percent) {
+                        Update-ProgressLine -State $Progress -Percent $Percent -Detail (Format-ByteProgress -Done $Done -Total $Length -Elapsed $Timer.Elapsed)
+                    }
+                }
+                elseif ($Percent -ge $NextPercent -and $Timer.Elapsed.TotalSeconds -gt 0) {
                     Write-HostTimestamp ('    {0}% ({1:N0} MB/s)' -f $Percent, ($Done / 1MB / $Timer.Elapsed.TotalSeconds)) -ForegroundColor DarkGray
                     $NextPercent = $Percent + 20
                 }
@@ -49,6 +58,7 @@ function Get-Sha256 {
     }
     catch { return $null }
     finally {
+        if ($Progress) { Clear-ProgressLine -State $Progress }
         if ($Stream) { $Stream.Dispose() }
         if ($Algorithm) { $Algorithm.Dispose() }
     }

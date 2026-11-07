@@ -4,8 +4,18 @@ What changed in each release. Versions are dates, `yyyy.MM.dd.<revision>`. Relea
 
 ## [Unreleased]
 
+### Added
+
+- `-ExcludeWorkPathFromDefender` excludes the working folder from Microsoft Defender real-time scanning while the build runs, which speeds up applying updates, the cleanup and committing the images. It is off by default. The exclusion is removed when the run ends, however it ends, and one that was already there is left alone. Nothing in the working folder is scanned while it is in place. See [Speeding Up a Build](docs/usage.md#speeding-up-a-build).
+
 ### Changed
 
+- The long steps now show a progress bar with a percentage, instead of sitting silent for several minutes: applying updates, cleaning up the component store, exporting images, downloading the ISO and update packages, copying an ISO to or from a network share, and hashing the ISO. Downloads and copies also show how much has transferred and how fast. The bar updates in place, is cleared when the step finishes, and is not written to the transcript or the log.
+- Committing and unmounting an image shows progress the whole way through. DISM says nothing for the first few minutes of a commit, so the line shows `Preparing the commit`, then how much has been written to the image, such as `Writing the image: 1.24 GB so far (2m 10s)`. It switches to a bar with a percentage once DISM starts reporting one. A commit has two stages, saving the image and then unmounting it, and each has its own bar, so the line is labeled with the stage.
+- Images are now exported and committed with `dism.exe` instead of the DISM PowerShell cmdlets, which is what makes their progress visible. A failure now reports DISM's error code and message.
+- A scheduled task registered with `-TaskUsername` now downloads directly instead of trying BITS first, because BITS only transfers files for a signed-in user. A task running as SYSTEM still uses BITS.
+- A BITS download that receives nothing for five minutes, or does not start within two, now gives up and falls back to a direct download. Before, BITS could keep retrying a dead connection indefinitely.
+- When the run has a console, the transcript no longer gets a line at every 20% while the ISO is hashed, because the bar replaces them. A run without a console, such as a scheduled one, still logs them.
 - Long console lines now wrap between words instead of being cut mid-word at the edge of the window. The rest of a wrapped line is indented to start under the message, not under the timestamp. The transcript has the same line breaks, and the CMTrace log still has each message on one line.
 
 ## [2026.11.02.5](https://github.com/bryceforsm/Windows-ISO-Updater/releases/tag/2026.11.02.5) - 2026-11-02

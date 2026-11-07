@@ -6,7 +6,7 @@ BeforeAll {
     $Names = @(
         'ConvertFrom-HotpatchCalendar', 'Read-ConfigFile', 'Format-ShortHash', 'Get-BuildParameterHash', 'Get-DefaultIsoName', 'Get-EditionRank', 'Get-EditionShortName',
         'Get-DismErrorCode', 'Get-DismErrorMeaning', 'Get-DismLogError', 'Get-DismMessage', 'Save-DismLog',
-        'Format-WrappedText', 'Get-FileDownload', 'Get-HotpatchBaselineKb', 'Get-PatchTuesdayStart', 'Get-ScheduledTaskArgumentString', 'Get-ScriptCommandLine', 'Get-TextSha256',
+        'Format-ByteProgress', 'Format-Duration', 'Format-ProgressLine', 'Format-WrappedText', 'Get-DismPercent', 'Get-FileDownload', 'Get-RobocopyPercent', 'Test-BitsUsable', 'Test-PathInList', 'Get-HotpatchBaselineKb', 'Get-PatchTuesdayStart', 'Get-ScheduledTaskArgumentString', 'Get-ScriptCommandLine', 'Get-TextSha256',
         'Resolve-EditionIndexes', 'Search-UpdateCatalog', 'Select-DefaultEditions', 'Select-HotpatchBaselineEntry', 'Test-FidoUrl', 'Test-IsHotpatchBaseline',
         'Test-MicrosoftDownloadUrl', 'Test-RebuildNeeded', 'Test-SameWriteTime', 'Test-UpdatePackageFile'
     )
@@ -352,6 +352,122 @@ Describe 'Get-PatchTuesdayStart' {
         $Start = Get-PatchTuesdayStart
         $Start.TimeOfDay | Should -BeOfType [timespan]
         $Start.CrossesMidnight | Should -BeOfType [bool]
+    }
+}
+
+Describe 'Get-DismPercent' {
+    It 'reads <Expected> from <Line>' -TestCases @(
+        @{ Line = '[=                          2.0%                           ]'; Expected = 2 }
+        @{ Line = '[==========================100.0%==========================]'; Expected = 100 }
+        @{ Line = '[===========                47,5%                          ]'; Expected = 47 }
+        @{ Line = '  [====  10%  ]  '; Expected = 10 }
+    ) {
+        Get-DismPercent -Line $Line | Should -Be $Expected
+    }
+
+    It 'ignores <Line>' -TestCases @(
+        @{ Line = 'The operation completed successfully.' }
+        @{ Line = 'Image Version: 10.0.26100.1' }
+        @{ Line = 'Free space is 15% of the disk [warning]' }
+        @{ Line = '' }
+    ) {
+        Get-DismPercent -Line $Line | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Test-PathInList' {
+    It 'finds the working folder whatever its case or trailing backslash' {
+        Test-PathInList -List @('D:\Other', 'c:\wiso-work\') -Path 'C:\WISO-Work' | Should -BeTrue
+    }
+
+    It 'does not take a folder whose name only starts the same' {
+        Test-PathInList -List @('C:\WISO-Work2', 'C:\WISO-Work\Mount') -Path 'C:\WISO-Work' | Should -BeFalse
+    }
+
+    It 'copes with an empty exclusion list' {
+        Test-PathInList -List $null -Path 'C:\WISO-Work' | Should -BeFalse
+    }
+}
+
+Describe 'Test-BitsUsable' {
+    It 'allows a signed-in user' {
+        Test-BitsUsable -UserSid 'S-1-5-21-1-2-3-1001' -GroupSids @('S-1-1-0', 'S-1-5-4', 'S-1-5-11') | Should -BeTrue
+    }
+
+    It 'allows <Name>, whose jobs run without anyone signed in' -TestCases @(
+        @{ Name = 'SYSTEM'; Sid = 'S-1-5-18' }
+        @{ Name = 'LOCAL SERVICE'; Sid = 'S-1-5-19' }
+        @{ Name = 'NETWORK SERVICE'; Sid = 'S-1-5-20' }
+    ) {
+        Test-BitsUsable -UserSid $Sid -GroupSids @('S-1-5-6') | Should -BeTrue
+    }
+
+    It 'refuses a scheduled task running as a user who is not signed in' {
+        Test-BitsUsable -UserSid 'S-1-5-21-1-2-3-1001' -GroupSids @('S-1-1-0', 'S-1-5-3', 'S-1-5-11') | Should -BeFalse
+    }
+}
+
+Describe 'Get-RobocopyPercent' {
+    It 'reads <Expected> from <Line>' -TestCases @(
+        @{ Line = '  0.1%'; Expected = 0 }
+        @{ Line = ' 47.5%'; Expected = 47 }
+        @{ Line = ' 12,5%'; Expected = 12 }
+        @{ Line = '100%'; Expected = 100 }
+    ) {
+        Get-RobocopyPercent -Line $Line | Should -Be $Expected
+    }
+
+    It 'ignores <Line>' -TestCases @(
+        @{ Line = "`t    New File  `t`t 800.0 m`tC:\src\big.bin" }
+        @{ Line = '[====   10.0%   ]' }
+        @{ Line = '' }
+    ) {
+        Get-RobocopyPercent -Line $Line | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Format-ProgressLine' {
+    It 'fills the bar in proportion to the percentage' {
+        $Line = Format-ProgressLine -Percent 50 -Detail '2m 13s' -Width 120 -Indent 4
+        $Line | Should -Be ('    [' + ('#' * 20) + ('-' * 20) + ']  50%  2m 13s')
+    }
+
+    It 'never reaches the last column, whatever the width' {
+        foreach ($Width in 20, 30, 40, 60, 80, 200) {
+            foreach ($Percent in 0, 37, 100) {
+                $Line = Format-ProgressLine -Percent $Percent -Detail '6.84 of 6.84 GB, 112 MB/s' -Width $Width -Indent 28
+                $Line.Length | Should -BeLessThan $Width
+            }
+        }
+    }
+
+    It 'shows the detail alone when there is no percentage' {
+        Format-ProgressLine -Percent -1 -Detail 'Writing the image: 1.24 GB so far (2m 10s)' -Width 120 -Indent 4 |
+            Should -Be '    Writing the image: 1.24 GB so far (2m 10s)'
+    }
+
+    It 'keeps a detail-only line out of the last column' {
+        $Line = Format-ProgressLine -Percent -1 -Detail ('x' * 60) -Width 50 -Indent 26
+        $Line.Length | Should -BeLessThan 50
+    }
+
+    It 'drops the indent on a narrow console rather than squeezing the bar to nothing' {
+        $Line = Format-ProgressLine -Percent 10 -Detail '5.0s' -Width 40 -Indent 28
+        $Line | Should -Match '^\[[#-]{10,}\]'
+    }
+}
+
+Describe 'Format-ByteProgress' {
+    It 'shows gigabytes for a large transfer' {
+        Format-ByteProgress -Done 1.5GB -Total 6GB -Elapsed ([TimeSpan]::FromSeconds(30)) | Should -Be '1.50 of 6.00 GB, 51 MB/s'
+    }
+
+    It 'shows megabytes for a small transfer' {
+        Format-ByteProgress -Done 100MB -Total 400MB -Elapsed ([TimeSpan]::FromSeconds(10)) | Should -Be '100 of 400 MB, 10 MB/s'
+    }
+
+    It 'leaves the speed out until a second has passed' {
+        Format-ByteProgress -Done 1MB -Total 400MB -Elapsed ([TimeSpan]::FromMilliseconds(200)) | Should -Be '1 of 400 MB'
     }
 }
 

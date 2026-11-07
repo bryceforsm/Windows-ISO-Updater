@@ -90,6 +90,9 @@ if (-not $Unattended -and -not $SkipInteractive -and -not $ListEditions -and -no
     if ($CompressEsd) {
         Write-HostLog "  - Export the image as install.esd with recovery compression (-CompressEsd): a much smaller ISO, but a slow export and the media cannot be serviced again afterwards" -ForegroundColor Yellow
     }
+    if ($ExcludeWorkPathFromDefender) {
+        Write-HostLog "  - Exclude the working folder from Defender real-time scanning while the build runs (-ExcludeWorkPathFromDefender), and remove the exclusion when it ends" -ForegroundColor Yellow
+    }
     if ($StripImageResidue) {
         Write-HostLog "  - Strip the servicing residue out of each image (-StripImageResidue): not everything that looks like leftover state is, so install from this ISO once before you deploy from it" -ForegroundColor Yellow
     }
