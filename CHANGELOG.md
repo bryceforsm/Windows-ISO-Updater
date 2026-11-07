@@ -4,6 +4,8 @@ What changed in each release. Versions are dates, `yyyy.MM.dd.<revision>`. Relea
 
 ## [Unreleased]
 
+## [2026.11.06.8](https://github.com/bryceforsm/Windows-ISO-Updater/releases/tag/2026.11.06.8) - 2026-11-06
+
 ### Added
 
 - `-ExcludeWorkPathFromDefender` excludes the folders where DISM does its work from Microsoft Defender real-time scanning while the build runs, which speeds up applying updates, the cleanup and committing the images. It is off by default. The exclusions are removed when the run ends, however it ends, and any that were already there are left alone. Downloads and the finished ISO are still scanned. See [Speeding Up a Build](docs/usage.md#speeding-up-a-build).
