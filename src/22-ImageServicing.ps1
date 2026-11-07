@@ -49,16 +49,21 @@ function Assert-DismSuccess {
     throw "$FailureMessage (DISM error $Code)$(if ($Said) { ": $Said" })"
 }
 
-# Runs a program in the background and, while it works, shows how much a file has grown and for how long.
-# For work that reports no progress of its own but writes into a known file as it goes. There is no
-# percentage, because how much will be written is not known in advance. -Waiting is shown until the file
-# starts to grow, and -Writing (followed by the amount) once it does. Returns the exit code and everything
-# the program printed. A file that cannot be read just leaves the line showing the time taken.
+# Runs a program in the background and, while it works, shows how far it has got. For work that can go quiet
+# for minutes at a time, so a line read from its output alone would sit still: a DISM commit says nothing
+# while it scans the mounted image, and only reports a percentage once it starts writing.
+#
+# Two things are watched once a second. -WatchFile is a file the work writes into, and how much it has grown
+# is shown. -GetPercent is handed each line the program has printed so far, and returns a percentage or
+# $null. Once one turns up the line becomes a bar. Until then it shows -Waiting before the file starts to
+# grow, and -Writing followed by the amount once it does. Returns the exit code and everything the program
+# printed. Anything that cannot be read just leaves the line showing the time taken.
 function Invoke-WatchedProcess {
     param(
         [Parameter(Mandatory)][string]$FilePath,
         [Parameter(Mandatory)][string]$Arguments,
         [string]$WatchFile,
+        [scriptblock]$GetPercent,
         [string]$Waiting = 'Working',
         [string]$Writing = 'Writing',
         [int]$Indent = 0
@@ -69,20 +74,50 @@ function Invoke-WatchedProcess {
     $OutFile = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath ('wiso_' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.out')
     $ErrFile = "$OutFile.err"
     $Progress = New-ProgressLine -Indent $Indent
+    $ReadFrom = [long]0
+    $Pending = ''
+    $Percent = $null
     try {
         $Proc = Start-Process -FilePath $FilePath -ArgumentList $Arguments -NoNewWindow -PassThru -RedirectStandardOutput $OutFile -RedirectStandardError $ErrFile -ErrorAction Stop
         # Read once now, because without the handle the exit code can come back empty once the process is gone.
         $null = $Proc.Handle
         while (-not $Proc.WaitForExit(1000)) {
+            # Whatever the program has printed since the last look. The last piece may be a line still being
+            # written, so it is held back until the next look completes it.
+            if ($GetPercent) {
+                try {
+                    $Stream = [System.IO.File]::Open($OutFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+                    try {
+                        [void]$Stream.Seek($ReadFrom, [System.IO.SeekOrigin]::Begin)
+                        $Bytes = New-Object byte[] ([int][math]::Min(1MB, $Stream.Length - $ReadFrom))
+                        $Count = $Stream.Read($Bytes, 0, $Bytes.Length)
+                        $ReadFrom += $Count
+                    }
+                    finally { $Stream.Dispose() }
+                    # A program writing UTF-16 leaves a NUL after every character, which would hide the digits.
+                    $Pieces = ($Pending + [System.Text.Encoding]::ASCII.GetString($Bytes, 0, $Count).Replace([string][char]0, '')) -split '[\r\n]'
+                    $Pending = $Pieces[-1]
+                    for ($i = 0; $i -lt $Pieces.Count - 1; $i++) {
+                        $Found = & $GetPercent $Pieces[$i]
+                        if ($null -ne $Found) { $Percent = $Found }
+                    }
+                }
+                catch { }
+            }
             $Elapsed = Format-Duration ((Get-Date) - $Progress.Start)
             $Written = 0
             if ($null -ne $StartSize) {
                 try { $Written = [long](Get-Item -LiteralPath $WatchFile -ErrorAction Stop).Length - $StartSize } catch { }
             }
-            $Detail = if ($Written -ge 1GB) { '{0}: {1:N2} GB so far ({2})' -f $Writing, ($Written / 1GB), $Elapsed }
-                      elseif ($Written -ge 1MB) { '{0}: {1:N0} MB so far ({2})' -f $Writing, ($Written / 1MB), $Elapsed }
-                      else { '{0} ({1})' -f $Waiting, $Elapsed }
-            Update-ProgressLine -State $Progress -Percent -1 -Detail $Detail
+            $Amount = if ($Written -ge 1GB) { '{0:N2} GB' -f ($Written / 1GB) } elseif ($Written -ge 1MB) { '{0:N0} MB' -f ($Written / 1MB) } else { $null }
+            if ($null -ne $Percent) {
+                $Detail = if ($Amount) { "$Amount written, $Elapsed" } else { $Elapsed }
+                Update-ProgressLine -State $Progress -Percent $Percent -Detail $Detail
+            }
+            else {
+                $Detail = if ($Amount) { "${Writing}: $Amount so far ($Elapsed)" } else { "$Waiting ($Elapsed)" }
+                Update-ProgressLine -State $Progress -Percent -1 -Detail $Detail
+            }
         }
         $Proc.WaitForExit()
         return [pscustomobject]@{
@@ -115,9 +150,11 @@ function Export-WimImage {
 # Dismount-WindowsImage -Save, through dism.exe. Throws if DISM fails, leaving the image mounted for the
 # caller's own discard-and-recover handling, as the cmdlet did.
 #
-# DISM prints no progress while it commits, so the image file it is committing to is watched instead: a
-# commit writes the changed files back into the .wim, which grows as it goes. The line shows how much has
-# been written and for how long, and "Preparing" while DISM is still scanning the mounted image.
+# DISM says nothing for the first part of a commit, often minutes, while it scans the mounted image, and only
+# reports a percentage once it starts writing. So it runs in the background with the image file it commits
+# to watched as well: the .wim grows as the changed files are written back into it. The line shows
+# "Preparing" during the scan, how much has been written once the file grows, and DISM's own bar as soon as
+# it reports one.
 function Save-MountedImage {
     param(
         [Parameter(Mandatory)][string]$Path,
@@ -129,7 +166,7 @@ function Save-MountedImage {
         if ($Mounted) { $ImagePath = $Mounted.ImagePath }
     }
     catch { }   # without it the line still shows the time taken
-    $Result = Invoke-WatchedProcess -FilePath 'dism.exe' -Arguments "/Unmount-Image /MountDir:`"$($Path.TrimEnd('\'))`" /Commit" -WatchFile $ImagePath -Waiting 'Preparing the commit' -Writing 'Writing the image' -Indent $Indent
+    $Result = Invoke-WatchedProcess -FilePath 'dism.exe' -Arguments "/Unmount-Image /MountDir:`"$($Path.TrimEnd('\'))`" /Commit" -WatchFile $ImagePath -GetPercent { param($Line) Get-DismPercent -Line $Line } -Waiting 'Preparing the commit' -Writing 'Writing the image' -Indent $Indent
     Assert-DismSuccess -Output $Result.Output -ExitCode $Result.ExitCode -FailureMessage "Could not commit and unmount the image at $Path"
 }
 
