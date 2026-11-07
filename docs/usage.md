@@ -31,7 +31,7 @@ To use command-line parameters, run the batch file from a Command Prompt or Powe
     .\Run-Windows-ISO-Updater.bat -Unattended -InstallAdk -Edition "Windows 11 Pro"
     ```
 
-Relative paths such as `.\Examples\autounattend-lab-admin.xml` are read from the folder you ran it in, even after the administrator prompt reopens it in a new window. Run from a terminal, the batch file waits for the script and passes on its exit code, so `-CheckOnly` can be scripted against it. Double-clicked or dropped onto from Explorer, its own window closes as soon as the administrator window opens.
+Relative paths such as `.\Examples\autounattend-update-after-setup.xml` are read from the folder you ran it in, even after the administrator prompt reopens it in a new window. Run from a terminal, the batch file waits for the script and passes on its exit code, so `-CheckOnly` can be scripted against it. Double-clicked or dropped onto from Explorer, its own window closes as soon as the administrator window opens.
 
 The full list is in [Command-Line Parameters](parameters.md).
 
@@ -292,7 +292,7 @@ Things worth knowing:
 - **It is build-affecting.** The stamp records a hash of the whole folder, so swapping in a newer driver forces a rebuild on the next scheduled run even though the path did not change.
 - **Drivers go in after the updates**, so an inbox driver the cumulative update brings along cannot supersede the one you supplied.
 
-The alternative that needs no rebuild is a `$WinPEDriver$` folder at the root of the USB stick. Both answer files in [`Examples/`](../Examples) look for one on every drive, `drvload` each `.inf` into the running WinPE, then run `dism /Add-Driver` against the freshly applied image. That is the better choice for a driver that only one machine needs.
+The alternative that needs no rebuild is a `$WinPEDriver$` folder at the root of the USB stick, or of any other drive the machine can see while Setup runs. Windows Setup looks for one on its own, with no answer file needed, and loads its drivers both into Setup and into the Windows it installs. That is the better choice for a driver that only one machine needs.
 
 ## Adding Your Own Files to the ISO
 

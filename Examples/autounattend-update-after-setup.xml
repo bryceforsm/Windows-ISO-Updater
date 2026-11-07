@@ -1,0 +1,261 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    autounattend-update-after-setup.xml
+
+    Finishes the updates an ISO cannot carry, once Windows is installed. Pass it with -UnattendPath:
+
+        .\Run-Windows-ISO-Updater.bat -UnattendPath ".\Examples\autounattend-update-after-setup.xml"
+
+    It takes over nothing else. Setup still asks which disk to use, the region, the keyboard and the
+    account, exactly as it would without an answer file, and Autopilot still checks in. Nothing in it can
+    wipe a disk.
+
+    During the specialize pass it writes C:\Windows\Setup\Scripts\Update-AfterSetup.ps1 and registers a
+    scheduled task that runs it as SYSTEM at startup. On each run, the script:
+
+      1. Waits until the setup screens (OOBE) have finished, so it never competes with them.
+      2. Waits for an internet connection.
+      3. Updates Microsoft Defender's security intelligence, which changes several times a day and so is
+         out of date on any ISO the moment it is built.
+      4. Installs whatever Windows Update still offers: drivers, the Malicious Software Removal Tool, the
+         Defender platform, and anything published after the ISO was built. Optional and preview updates
+         and feature updates (a new Windows release) are left alone. It never restarts the computer.
+      5. Asks the Microsoft Store to update its apps.
+
+    When a run finds nothing left to install, the task deletes itself. A run that installed something
+    leaves the task in place, so the next startup checks again for anything that only appears after a
+    restart. After five runs it stops regardless, so a broken update can never keep it going forever.
+
+    The log is C:\Windows\Logs\Update-AfterSetup.log.
+
+    On a managed machine, Windows Update follows the machine's own policy, so updates come from WSUS or
+    are deferred exactly as they would be otherwise.
+
+    Hand-written for this repository, not generated. The <Extensions> block at the end is not read by
+    Windows Setup. The first specialize command reads this file back from C:\Windows\Panther\unattend.xml
+    and writes each <File> in it to disk.
+-->
+<unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+    <settings pass="specialize">
+        <!-- The same two commands for each architecture. Setup only runs the block that matches the media. -->
+        <component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+            <RunSynchronous>
+                <RunSynchronousCommand wcm:action="add">
+                    <Order>1</Order>
+                    <Path>powershell.exe -NoProfile -Command "$xml = [xml]::new(); $xml.Load('C:\Windows\Panther\unattend.xml'); $sb = [scriptblock]::Create( $xml.unattend.Extensions.ExtractScript.InnerText ); Invoke-Command -ScriptBlock $sb -ArgumentList $xml;"</Path>
+                    <Description>Write the scripts embedded in this answer file to disk</Description>
+                </RunSynchronousCommand>
+                <RunSynchronousCommand wcm:action="add">
+                    <Order>2</Order>
+                    <Path>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\Windows\Setup\Scripts\Update-AfterSetup.ps1" -Register</Path>
+                    <Description>Register the task that updates Windows once setup has finished</Description>
+                </RunSynchronousCommand>
+            </RunSynchronous>
+        </component>
+        <component name="Microsoft-Windows-Deployment" processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+            <RunSynchronous>
+                <RunSynchronousCommand wcm:action="add">
+                    <Order>1</Order>
+                    <Path>powershell.exe -NoProfile -Command "$xml = [xml]::new(); $xml.Load('C:\Windows\Panther\unattend.xml'); $sb = [scriptblock]::Create( $xml.unattend.Extensions.ExtractScript.InnerText ); Invoke-Command -ScriptBlock $sb -ArgumentList $xml;"</Path>
+                    <Description>Write the scripts embedded in this answer file to disk</Description>
+                </RunSynchronousCommand>
+                <RunSynchronousCommand wcm:action="add">
+                    <Order>2</Order>
+                    <Path>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\Windows\Setup\Scripts\Update-AfterSetup.ps1" -Register</Path>
+                    <Description>Register the task that updates Windows once setup has finished</Description>
+                </RunSynchronousCommand>
+            </RunSynchronous>
+        </component>
+    </settings>
+    <Extensions xmlns="https://github.com/bryceforsm/Windows-ISO-Updater/unattend">
+        <ExtractScript><![CDATA[
+param([xml]$Document)
+
+# Writes every <File> below to the path in its path attribute, as UTF-8 with a byte order mark so Windows
+# PowerShell 5.1 reads any non-ASCII text in it correctly.
+foreach ($File in $Document.unattend.Extensions.File) {
+    $Path = [System.Environment]::ExpandEnvironmentVariables($File.GetAttribute('path'))
+    New-Item -ItemType Directory -Path (Split-Path -Parent $Path) -Force -ErrorAction SilentlyContinue | Out-Null
+    $Encoding = New-Object System.Text.UTF8Encoding($true)
+    [System.IO.File]::WriteAllText($Path, $File.InnerText.Trim(), $Encoding)
+}
+]]></ExtractScript>
+        <File path="C:\Windows\Setup\Scripts\Update-AfterSetup.ps1"><![CDATA[
+# Update-AfterSetup.ps1
+# Written by autounattend-update-after-setup.xml from Windows ISO Updater. Run once with -Register during
+# Windows Setup's specialize pass, which registers a startup task that runs this script again, without
+# -Register, as SYSTEM after every restart until nothing is left to install. See that file's header for
+# what it does.
+param([switch]$Register)
+
+$ErrorActionPreference = 'Continue'
+$TaskName = 'Windows ISO Updater - Updates After Setup'
+$ScriptFile = 'C:\Windows\Setup\Scripts\Update-AfterSetup.ps1'
+$LogFile = Join-Path -Path $env:SystemRoot -ChildPath 'Logs\Update-AfterSetup.log'
+$StateFile = 'C:\Windows\Setup\Scripts\Update-AfterSetup.runs'
+$MaxRuns = 5
+
+function Write-Log {
+    param([string]$Message)
+    $Line = '{0} {1}' -f (Get-Date -Format '[MM/dd/yyyy|HH:mm:ss]'), $Message
+    try { Add-Content -LiteralPath $LogFile -Value $Line -Encoding UTF8 -ErrorAction Stop } catch { }
+}
+
+function Remove-UpdateTask {
+    try { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction Stop }
+    catch { & schtasks.exe /Delete /TN $TaskName /F 2>&1 | Out-Null }
+    Remove-Item -LiteralPath $StateFile -Force -ErrorAction SilentlyContinue
+    Write-Log 'Finished. The task has removed itself.'
+}
+
+# --- Specialize pass: register the task, nothing else -----------------------------------------------
+if ($Register) {
+    $Shell = Join-Path -Path $env:SystemRoot -ChildPath 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$ScriptFile`""
+    try {
+        $Action = New-ScheduledTaskAction -Execute $Shell -Argument $Arguments
+        $Trigger = New-ScheduledTaskTrigger -AtStartup
+        $Trigger.Delay = 'PT2M'
+        $Principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+        # Laptops often finish setup on battery, and the default settings would skip the run entirely.
+        $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 4) -MultipleInstances IgnoreNew
+        Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Principal $Principal -Settings $Settings -Force -ErrorAction Stop | Out-Null
+        Write-Log "Registered the startup task '$TaskName'."
+    }
+    catch {
+        # schtasks cannot set the battery options, but a task that sometimes waits for mains power is
+        # better than none.
+        Write-Log "Register-ScheduledTask failed ($($_.Exception.Message)), falling back to schtasks."
+        & schtasks.exe /Create /TN $TaskName /TR "`"$Shell`" $Arguments" /SC ONSTART /DELAY 0002:00 /RU SYSTEM /RL HIGHEST /F 2>&1 | ForEach-Object { Write-Log "  schtasks: $_" }
+    }
+    return
+}
+
+# --- Startup run --------------------------------------------------------------------------------------
+$Runs = 0
+try { $Runs = [int](Get-Content -LiteralPath $StateFile -ErrorAction Stop) } catch { }
+$Runs++
+Set-Content -LiteralPath $StateFile -Value $Runs -ErrorAction SilentlyContinue
+Write-Log "Run $Runs of at most $MaxRuns."
+
+# 1. Wait for the setup screens to finish. Windows Update and the Store both work during OOBE, but OOBE
+#    and Autopilot do their own updating there, and racing them gains nothing.
+$Waited = 0
+while ($Waited -lt 180) {
+    $Setup = Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\Setup' -ErrorAction SilentlyContinue
+    if ($Setup.OOBEInProgress -ne 1 -and $Setup.SystemSetupInProgress -ne 1) { break }
+    if ($Waited -eq 0) { Write-Log 'Waiting for the setup screens to finish...' }
+    Start-Sleep -Seconds 60
+    $Waited++
+}
+if ($Waited -ge 180) { Write-Log 'Setup has not finished after three hours. Trying again at the next startup.'; return }
+
+# 2. Wait for the internet, using the same test page Windows uses to decide it is online.
+$Online = $false
+for ($Try = 0; $Try -lt 60; $Try++) {
+    try {
+        $Reply = Invoke-WebRequest -Uri 'http://www.msftconnecttest.com/connecttest.txt' -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop
+        if ($Reply.Content -match 'Microsoft Connect Test') { $Online = $true; break }
+    }
+    catch { }
+    if ($Try -eq 0) { Write-Log 'Waiting for an internet connection...' }
+    Start-Sleep -Seconds 60
+}
+if (-not $Online) {
+    Write-Log 'No internet connection after an hour.'
+    if ($Runs -ge $MaxRuns) { Remove-UpdateTask } else { Write-Log 'Trying again at the next startup.' }
+    return
+}
+
+# 3. Defender's security intelligence. Skipped when another antivirus is the active one, because Defender
+#    then sits in passive mode and updates only what Windows Update gives it.
+$MpCmdRun = Join-Path -Path $env:ProgramFiles -ChildPath 'Windows Defender\MpCmdRun.exe'
+$DefenderActive = $false
+try {
+    $Status = Get-CimInstance -Namespace 'root/Microsoft/Windows/Defender' -ClassName MSFT_MpComputerStatus -ErrorAction Stop
+    $DefenderActive = $Status -and (-not $Status.AMRunningMode -or "$($Status.AMRunningMode)" -eq 'Normal')
+}
+catch { }
+if ($DefenderActive -and (Test-Path -LiteralPath $MpCmdRun)) {
+    for ($Try = 1; $Try -le 3; $Try++) {
+        & $MpCmdRun -SignatureUpdate | Out-Null
+        if ($LASTEXITCODE -eq 0) { break }
+        Start-Sleep -Seconds 30
+    }
+    Write-Log "Defender security intelligence update: exit code $LASTEXITCODE."
+}
+else {
+    Write-Log 'Defender is not the active antivirus, so its security intelligence is left to Windows Update.'
+}
+
+# 4. Whatever Windows Update still offers, in up to three rounds, because some updates (a servicing
+#    stack, for example) only make others visible once they are installed.
+$Installed = 0
+$Failed = 0
+$RestartNeeded = $false
+$Remaining = $true
+try {
+    $Session = New-Object -ComObject Microsoft.Update.Session
+    $Session.ClientApplicationID = 'Windows ISO Updater'
+    for ($Round = 1; $Round -le 3 -and -not $RestartNeeded; $Round++) {
+        # BrowseOnly=0 leaves out the optional updates, including the monthly preview, which Settings
+        # lists under "Optional updates".
+        $Found = $Session.CreateUpdateSearcher().Search('IsInstalled=0 and IsHidden=0 and BrowseOnly=0').Updates
+        $Wanted = New-Object -ComObject Microsoft.Update.UpdateColl
+        foreach ($Update in $Found) {
+            $Categories = @($Update.Categories | ForEach-Object { $_.Name })
+            # A feature update is a new Windows release, which is a decision for the owner of the
+            # machine, not something to slip in after setup. Updates that would show a prompt are
+            # skipped, because nobody is there to answer it.
+            if ($Categories -contains 'Upgrades' -or $Update.InstallationBehavior.CanRequestUserInput) {
+                Write-Log "  Skipped: $($Update.Title)"
+                continue
+            }
+            if (-not $Update.EulaAccepted) { $Update.AcceptEula() }
+            [void]$Wanted.Add($Update)
+        }
+        if ($Wanted.Count -eq 0) {
+            $Remaining = $false
+            Write-Log "Windows Update round ${Round}: nothing left to install."
+            break
+        }
+        Write-Log "Windows Update round ${Round}: $($Wanted.Count) update(s) to install."
+        $Downloader = $Session.CreateUpdateDownloader()
+        $Downloader.Updates = $Wanted
+        [void]$Downloader.Download()
+        $Installer = $Session.CreateUpdateInstaller()
+        $Installer.Updates = $Wanted
+        try { $Installer.ForceQuiet = $true } catch { }
+        $Result = $Installer.Install()
+        for ($i = 0; $i -lt $Wanted.Count; $i++) {
+            $Code = $Result.GetUpdateResult($i).ResultCode
+            # 2 = succeeded, 3 = succeeded with errors. Anything else did not install.
+            if ($Code -eq 2 -or $Code -eq 3) { $Installed++; $Outcome = 'installed' } else { $Failed++; $Outcome = "failed (result code $Code)" }
+            Write-Log "  $Outcome`: $($Wanted.Item($i).Title)"
+        }
+        if ($Result.RebootRequired) { $RestartNeeded = $true }
+    }
+}
+catch {
+    Write-Log "Windows Update could not be run: $($_.Exception.Message)"
+}
+if ($RestartNeeded) { Write-Log "Installed $Installed update(s). A restart is needed to finish, and is left for you to choose the moment." }
+
+# 5. The Store's own apps. This only asks the Store to check, and the Store downloads in the background.
+try {
+    $Apps = Get-CimInstance -Namespace 'root/cimv2/mdm/dmmap' -ClassName 'MDM_EnterpriseModernAppManagement_AppManagement01' -ErrorAction Stop
+    $Scan = $Apps | Invoke-CimMethod -MethodName UpdateScanMethod -ErrorAction Stop
+    Write-Log "Asked the Microsoft Store to update its apps (return value $($Scan.ReturnValue))."
+}
+catch {
+    Write-Log "Could not ask the Microsoft Store to update its apps: $($_.Exception.Message)"
+}
+
+# Done when Windows Update has nothing left. Otherwise the next startup checks again, because a restart
+# can bring updates that only become visible afterwards. Five runs is the most it will ever take.
+if (-not $Remaining -and -not $RestartNeeded) { Remove-UpdateTask }
+elseif ($Runs -ge $MaxRuns) { Write-Log "Stopping after $MaxRuns runs, with $Failed update(s) that did not install. Windows Update will offer them again as normal."; Remove-UpdateTask }
+else { Write-Log 'Checking again at the next startup.' }
+]]></File>
+    </Extensions>
+</unattend>

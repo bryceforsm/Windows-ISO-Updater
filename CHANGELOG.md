@@ -7,6 +7,11 @@ What changed in each release. Versions are dates, `yyyy.MM.dd.<revision>`. Relea
 ### Added
 
 - Every run's log now starts with a short report on the machine: the Windows version and patch level, PowerShell and DISM versions, who the run is and whether BITS can work for it, the active antivirus, whether a restart is pending and when the machine last restarted, the working drive's file system, free space and disk type, any proxy, and the hardware. A log attached to an issue then answers the usual first questions. A restart pending for the servicing stack or Windows Update is shown in yellow, because it can make DISM fail. See [Logging](docs/reference.md#logging).
+- `Examples/autounattend-update-after-setup.xml` finishes the updates an ISO cannot carry, once Windows is installed: Defender's security intelligence, whatever Windows Update still offers (drivers, the Malicious Software Removal Tool, anything published after the ISO was built), and the Microsoft Store's apps. It changes nothing else about Setup and never restarts the computer. See [Finishing the Updates After Setup](docs/unattended-installs.md#finishing-the-updates-after-setup).
+
+### Removed
+
+- The four experimental example answer files (`autounattend-lab-admin.xml`, `autounattend-gold-image.xml`, `autounattend-ultimate.xml` and `autounattend-driver-install.xml`) and `tools/Sync-EmbeddedDriverScripts.ps1`, which only kept copies of the driver scripts inside one of them. The driver scripts in `tools/` remain, and work on their own.
 
 ## [2026.11.06.8](https://github.com/bryceforsm/Windows-ISO-Updater/releases/tag/2026.11.06.8) - 2026-11-06
 
