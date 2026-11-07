@@ -3,6 +3,8 @@
 # group is [checkpoint..., LCU]). Groups are applied independently with the documented sole-target method.
 $UpdateGroups = New-Object System.Collections.Generic.List[object]
 $SafeOsGroup = $null
+# The groups that are a servicing stack update, which go in ahead of the rest and are labelled as such.
+$script:ServicingStackFiles = New-Object System.Collections.Generic.List[string]
 $script:SetupDu = $null
 # The Safe OS KB and the builds it delivers, shared so the per-edition WinRE check asks the support page once.
 $script:SafeOsKb = $null
@@ -26,7 +28,18 @@ elseif ($UpdatePath) {
     # Treat the supplied files as one group ordered by KB ascending, so the latest (target) is applied last
     # and any prior checkpoints are staged alongside it.
     $OrderedUserFiles = @($script:UpdateFiles | Sort-Object { if ((Split-Path -Leaf $_) -match '(?i)kb(\d{6,})') { [int]$Matches[1] } else { 0 } })
-    $UpdateGroups.Add($OrderedUserFiles)
+    # A standalone servicing stack update usually has the lower KB, so in the group it would only be staged
+    # beside the target and never applied. It goes in on its own, first.
+    $UserRest = @()
+    foreach ($File in $OrderedUserFiles) {
+        if (Test-StandaloneServicingStack -Path $File -WorkDir $WorkRoot) {
+            Write-HostTimestamp "  $(Split-Path -Leaf $File) is a servicing stack update, so it is applied on its own before the others." -ForegroundColor Green
+            $UpdateGroups.Add(@($File))
+            $script:ServicingStackFiles.Add($File)
+        }
+        else { $UserRest += $File }
+    }
+    if ($UserRest.Count -gt 0) { $UpdateGroups.Add($UserRest) }
     Write-Host $LineBreak
 }
 else {
@@ -96,7 +109,9 @@ else {
             $Query = "Cumulative Update for .NET Framework $(Get-CatalogProductQuery -FeatureUpdate $FeatureName) for $CatalogArch"
             $script:DotNet = Get-LatestCatalogPackage -Query $Query -DownloadDir $DlDir -TitleInclude '(?i)\.net framework' -TitleExclude '(?i)dynamic update' -AllowPreview:$IncludePreview
         }
-        if ($script:DotNet) { $UpdateGroups.Add(@($script:DotNet)) }
+        # One group each, because the packages are for different .NET versions (4.8 and 4.8.1 on Windows 10 and
+        # Server 2022), not a checkpoint chain. Grouped, only the last one reached DISM.
+        if ($script:DotNet) { foreach ($Package in @($script:DotNet)) { $UpdateGroups.Add(@($Package)) } }
         else {
             Write-HostTimestamp '  No .NET cumulative update was integrated (none found).' -ForegroundColor Yellow
             Write-Host $LineBreak
@@ -167,6 +182,29 @@ if ($script:SetupDu) { $script:StampUpdateFiles += @($script:SetupDu) }
 if ($SafeOsGroup) { $script:StampUpdateFiles += @($SafeOsGroup) }
 # Hashed here, once, because both the media tattoo and the build stamp describe the same packages.
 $script:UpdateFileRecords = @(Get-UpdateFileRecords -Paths $script:StampUpdateFiles -DownloadDir $DlDir)
+
+# The servicing stack bundled in a combined update goes in ahead of everything, rather than only after a
+# 0x800F0823, because the attempt that discovers an out-of-date stack can leave the image unserviceable.
+# Extracted once here instead of once per image, and after the stamp, because it is part of a file already in it.
+$ServicingStackDir = Join-Path -Path $WorkRoot -ChildPath 'ServicingStack'
+Remove-Item -LiteralPath $ServicingStackDir -Recurse -Force -ErrorAction SilentlyContinue
+$BundledStacks = @()
+foreach ($Group in $UpdateGroups.ToArray()) {
+    $Target = "$(@($Group)[-1])"
+    if ($Target -notmatch '(?i)\.msu$' -or $script:ServicingStackFiles.Contains($Target)) { continue }
+    $Stack = $null
+    try { $Stack = Expand-ServicingStack -PackagePath $Target -Destination (Join-Path -Path $ServicingStackDir -ChildPath ([IO.Path]::GetFileNameWithoutExtension($Target))) }
+    catch { Write-HostTimestamp "Could not extract the servicing stack from $(Split-Path -Leaf $Target): $($_.Exception.Message)" -ForegroundColor Yellow }
+    if ($Stack) {
+        Write-HostTimestamp "$(Split-Path -Leaf $Target) carries servicing stack update $($Stack.Name), which is applied to each image before the updates."
+        $BundledStacks += $Stack.FullName
+    }
+}
+for ($i = $BundledStacks.Count - 1; $i -ge 0; $i--) {
+    $UpdateGroups.Insert(0, @($BundledStacks[$i]))
+    $script:ServicingStackFiles.Add($BundledStacks[$i])
+}
+if ($BundledStacks.Count -gt 0) { Write-Host $LineBreak }
 
 #endregion
 

@@ -138,7 +138,9 @@ if ($RecoveryIsoOnly) {
                     Reset-MountDirectory -Path $WinReMount -ImagePath $script:RecoveryWinRe
                     try {
                         Mount-WindowsImage -ImagePath $script:RecoveryWinRe -Index 1 -Path $WinReMount -ErrorAction Stop | Out-Null
+                        $script:ImageUnserviceable = $false
                         Add-UpdateGroup -MountDir $WinReMount -Group @($script:SafeOs) -Label 'Safe OS Dynamic Update' | Out-Null
+                        if ($script:ImageUnserviceable) { throw 'DISM reports the recovery image can no longer be serviced, so it was discarded' }
                         Write-HostTimestamp '      Cleaning up the recovery image component store (/StartComponentCleanup /ResetBase)...'
                         Invoke-Dism -ArgumentList "/Image:$WinReMount", '/Cleanup-Image', '/StartComponentCleanup', '/ResetBase' | Out-Null
                         New-Item -ItemType Directory -Path $RecoveryBootManagers -Force -ErrorAction Stop | Out-Null

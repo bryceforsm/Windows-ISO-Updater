@@ -143,7 +143,9 @@ if ($UpdateGroups.Count -gt 0 -or $script:DriverInfFiles.Count -gt 0) {
                                 Set-ItemProperty -LiteralPath $WinReWim -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
                                 Write-HostTimestamp '    Servicing the recovery image (winre.wim)...'
                                 Mount-WindowsImage -ImagePath $WinReWim -Index 1 -Path $WinReMount -ErrorAction Stop | Out-Null
+                                $script:ImageUnserviceable = $false
                                 Add-UpdateGroup -MountDir $WinReMount -Group $SafeOsGroup -Label 'Safe OS Dynamic Update' -ImageLabel $WinReLabel | Out-Null
+                                if ($script:ImageUnserviceable) { throw 'DISM reports the recovery image can no longer be serviced, so it was discarded' }
                                 Write-HostTimestamp '      Cleaning up the recovery image component store (/StartComponentCleanup /ResetBase)...'
                                 Invoke-Dism -ArgumentList "/Image:$WinReMount", '/Cleanup-Image', '/StartComponentCleanup', '/ResetBase' | Out-Null
                                 Remove-ImageResidue -MountDir $WinReMount
@@ -162,7 +164,8 @@ if ($UpdateGroups.Count -gt 0 -or $script:DriverInfFiles.Count -gt 0) {
                                 # Deliberately not fatal. A recovery image that will not service must never cost
                                 # the user the ISO, so the edition keeps the winre.wim it shipped with.
                                 Write-HostTimestamp "      WinRE servicing failed: $($_.Exception.Message). This edition keeps the recovery image it shipped with." -ForegroundColor Yellow
-                                Add-ServicingResult -Image $WinReLabel -Package 'Safe OS Dynamic Update' -Result 'Failed' -Detail $_.Exception.Message
+                                # Add-UpdateGroup has already recorded the package that broke it.
+                                if (-not $script:ImageUnserviceable) { Add-ServicingResult -Image $WinReLabel -Package 'Safe OS Dynamic Update' -Result 'Failed' -Detail $_.Exception.Message }
                                 Dismount-ImageDiscard -Path $WinReMount | Out-Null
                             }
                         }
@@ -171,8 +174,27 @@ if ($UpdateGroups.Count -gt 0 -or $script:DriverInfFiles.Count -gt 0) {
 
                 Write-HostTimestamp '    Applying updates to install.wim...'
                 $script:InstallApplyOk = $true
+                $script:ImageUnserviceable = $false
+                $InstallLabel = "install.wim index $Index ($EditionName)"
                 foreach ($Group in $UpdateGroups) {
-                    if (-not (Add-UpdateGroup -MountDir $MountDir -Group $Group -ImageLabel "install.wim index $Index ($EditionName)")) { $script:InstallApplyOk = $false }
+                    # A servicing stack that will not go in is not the update missing, and the update's own
+                    # 0x800F0823 handling still gets a turn.
+                    $IsStack = $script:ServicingStackFiles.Contains("$(@($Group)[-1])")
+                    $GroupLabel = if ($IsStack) { 'servicing stack update' } else { 'update package' }
+                    if (-not (Add-UpdateGroup -MountDir $MountDir -Group $Group -Label $GroupLabel -ImageLabel $InstallLabel) -and -not $IsStack) { $script:InstallApplyOk = $false }
+                    if ($script:ImageUnserviceable) { break }
+                }
+                # Committing would ship an image DISM has said is broken, which is worse than an unpatched one.
+                if ($script:ImageUnserviceable) {
+                    $script:ServicingFailures++
+                    Write-HostTimestamp "    DISM left index $Index ($EditionName) unserviceable, so it is being discarded. This edition ships exactly as the source media had it, with no updates or drivers added." -ForegroundColor Yellow
+                    Dismount-ImageDiscard -Path $MountDir | Out-Null
+                    Set-ServicingResultDiscarded -Image @($InstallLabel, $WinReLabel)
+                    if ($WinReBefore) { Add-WinReVersionSample -Label $WinReVersionLabel -Version $WinReBefore.Version }
+                    $OriginalBuild = "$ImageVersionText$(if ($FeatureName) { " ($FeatureName)" })"
+                    $script:EditionBuilds.Add([ordered]@{ Index = [int]$Index; Edition = "$EditionName"; Build = $OriginalBuild })
+                    if (-not $script:FinalBuildString) { $script:FinalBuildString = $OriginalBuild }
+                    return
                 }
                 if (-not $script:InstallApplyOk) {
                     $script:ServicingFailures++
@@ -244,7 +266,22 @@ if ($UpdateGroups.Count -gt 0 -or $script:DriverInfFiles.Count -gt 0) {
                 try {
                     Reset-MountDirectory -Path $MountDir -ImagePath $BootWim
                     Mount-WindowsImage -ImagePath $BootWim -Index $BootImg.ImageIndex -Path $MountDir -ErrorAction Stop | Out-Null
-                    foreach ($Group in $UpdateGroups) { Add-UpdateGroup -MountDir $MountDir -Group $Group -ImageLabel "boot.wim index $($BootImg.ImageIndex) ($($BootImg.ImageName))" | Out-Null }
+                    $BootLabel = "boot.wim index $($BootImg.ImageIndex) ($($BootImg.ImageName))"
+                    $script:ImageUnserviceable = $false
+                    foreach ($Group in $UpdateGroups) {
+                        $GroupLabel = if ($script:ServicingStackFiles.Contains("$(@($Group)[-1])")) { 'servicing stack update' } else { 'update package' }
+                        Add-UpdateGroup -MountDir $MountDir -Group $Group -Label $GroupLabel -ImageLabel $BootLabel | Out-Null
+                        if ($script:ImageUnserviceable) { break }
+                    }
+                    # The media's loose Setup files are only replaced from index 2 when it was saved, so a discarded
+                    # index 2 leaves them matching the boot.wim that ships.
+                    if ($script:ImageUnserviceable) {
+                        $script:ServicingFailures++
+                        Write-HostTimestamp "    DISM left $BootLabel unserviceable, so it is being discarded and ships as the source media had it." -ForegroundColor Yellow
+                        Dismount-ImageDiscard -Path $MountDir | Out-Null
+                        Set-ServicingResultDiscarded -Image @($BootLabel)
+                        return
+                    }
                     # Only index 2 needs the drivers: that is the image Setup boots into, and it has to see
                     # the disk and the network card. Index 1 is loaded into a RAM disk and never installs.
                     if ([int]$BootImg.ImageIndex -eq 2) {

@@ -1,6 +1,6 @@
 # GENERATED FILE. Edit the files in src\ and run tools\Build-Script.ps1, because changes made here are overwritten.
 # Windows ISO Updater
-# Version: 2026.11.06.9   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
+# Version: 2026.11.07.1   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
 #
 #region Script overview
 # This script builds a fully up-to-date ("slipstreamed") Windows 11, Windows 10 or Windows Server
@@ -314,7 +314,7 @@ $script:ScriptPath = $PSCommandPath
 
 # Kept in step with the header comment by tools\Update-Version.ps1, and shown in the log and recorded in
 # the build stamp so a finished ISO can be traced back to the exact script that built it.
-$ScriptVersion = '2026.11.06.9'
+$ScriptVersion = '2026.11.07.1'
 
 # A scheduled run has nobody to answer a prompt.
 if ($Scheduled) {
@@ -694,7 +694,8 @@ function Get-FriendlyDate {
 
 function Format-Duration {
     param([TimeSpan]$Duration)
-    if ($Duration.TotalHours -ge 1) { return ('{0}h {1:00}m {2:00}s' -f [int]$Duration.TotalHours, $Duration.Minutes, $Duration.Seconds) }
+    # Floored, because [int] rounds and would show 1h 36m as 2h 36m.
+    if ($Duration.TotalHours -ge 1) { return ('{0}h {1:00}m {2:00}s' -f [math]::Floor($Duration.TotalHours), $Duration.Minutes, $Duration.Seconds) }
     if ($Duration.TotalMinutes -ge 1) { return ('{0}m {1:00}s' -f $Duration.Minutes, $Duration.Seconds) }
     return ('{0:N1}s' -f $Duration.TotalSeconds)
 }
@@ -1660,6 +1661,10 @@ function Get-FeatureUpdateName {
         20348  { '21H2'; break }   # Windows Server 2022
         19045  { '22H2'; break }   # Windows 10
         19044  { '21H2'; break }   # Windows 10
+        # 2004, 20H2 and 21H1 share one code base with 21H2 and 22H2 and take the same cumulative update. They
+        # are no longer serviced under their own names, while 21H2 is for as long as LTSC 2021 is supported,
+        # and LTSC 2021 media reports 19041 here even though it identifies itself as 21H2.
+        { $_ -in 19041, 19042, 19043 } { '21H2'; break }
         17763  { '1809'; break }   # Windows Server 2019 / Windows 10 1809
         14393  { '1607'; break }   # Windows Server 2016
         default { $null }
@@ -1682,7 +1687,8 @@ function Resolve-FeatureUpdateName {
     if ($Build -lt 10240) { return $null }
     if (-not $WimPath -or -not (Test-Path -LiteralPath $WimPath)) { return $null }
 
-    Write-HostTimestamp "  Build $Build is newer than any release this script has a name for, so the image is being asked directly. This takes a few minutes..." -ForegroundColor Yellow
+    # Not "newer", because a build the table skipped can be older than everything in it.
+    Write-HostTimestamp "  Build $Build has no release name in this script's list, so the image is being asked directly. This takes a few minutes..." -ForegroundColor Yellow
     $BuildString = Get-WimBuildViaMount -WimPath $WimPath
     # Get-MountedImageBuild appends the hive's DisplayVersion in brackets, e.g. "10.0.26200.9168 (25H2)".
     if ("$BuildString" -match '\(\s*(\d{2}H\d|\d{4})\s*\)') {
@@ -3730,9 +3736,27 @@ function Get-DismPercent {
     return [math]::Min(100, [int]$Matches[1])
 }
 
+# The text beside DISM's progress bar. DISM's percentage can sit still for many minutes and then jump, so the
+# time keeps counting to show the work is alive, and a long stretch at one percentage is called out before it
+# can be mistaken for a hang.
+function Format-DismProgressDetail {
+    param(
+        [int]$Percent,
+        [TimeSpan]$Elapsed,
+        [TimeSpan]$Unchanged
+    )
+    $Taken = Format-Duration ([TimeSpan]::FromSeconds([math]::Floor($Elapsed.TotalSeconds)))
+    if ($Percent -lt 0) { return "Working ($Taken)" }
+    if ($Unchanged.TotalSeconds -ge 60) {
+        return "$Taken, still working (no change for $(Format-Duration ([TimeSpan]::FromSeconds([math]::Floor($Unchanged.TotalSeconds)))))"
+    }
+    return $Taken
+}
+
 # Runs dism.exe and returns everything it printed, leaving $LASTEXITCODE as DISM set it. DISM redraws its
-# progress bar with carriage returns, and PowerShell hands each redraw over as a line of its own, so the
-# percentage is read off as it goes and shown on a progress line (see New-ProgressLine).
+# progress bar with carriage returns, which ReadLine hands over as lines of their own, so the percentage is read
+# off as it goes and shown on a progress line (see New-ProgressLine). The output is read asynchronously so the
+# line is redrawn every second even while DISM prints nothing, which it can do for minutes at a time.
 #
 # With -FailureMessage it stands in for a DISM cmdlet called with -ErrorAction Stop: any exit code other than
 # success or "restart needed" throws, with that message followed by DISM's error code and its own words.
@@ -3743,19 +3767,52 @@ function Invoke-Dism {
         [string]$FailureMessage
     )
 
-    $Progress = New-ProgressLine -Indent $Indent
-    try {
-        $Output = & dism.exe @ArgumentList 2>&1 | ForEach-Object {
-            $Line = "$_"
-            $Percent = Get-DismPercent -Line $Line
-            if ($null -ne $Percent) { Update-ProgressLine -State $Progress -Percent $Percent }
-            $Line
-        }
-    }
-    finally { Clear-ProgressLine -State $Progress }
+    $Info = New-Object System.Diagnostics.ProcessStartInfo
+    $Info.FileName = 'dism.exe'
+    # Quoted the way the call operator quotes, so a path with spaces still reaches DISM as one argument.
+    $Info.Arguments = (@($ArgumentList | ForEach-Object { if ("$_" -match '\s' -and "$_" -notmatch '^".*"$') { "`"$_`"" } else { "$_" } })) -join ' '
+    $Info.UseShellExecute = $false
+    # Left sharing this console, so Ctrl+C stops DISM along with the script instead of leaving it running.
+    $Info.CreateNoWindow = $false
+    $Info.RedirectStandardOutput = $true
+    $Info.RedirectStandardError = $true
+    # What PowerShell decodes a native command's output with, so DISM's words read as they did through a pipe.
+    $Info.StandardOutputEncoding = [Console]::OutputEncoding
+    $Info.StandardErrorEncoding = [Console]::OutputEncoding
 
-    if ($FailureMessage) { Assert-DismSuccess -Output $Output -ExitCode $LASTEXITCODE -FailureMessage $FailureMessage }
-    return $Output
+    $Output = New-Object System.Collections.Generic.List[string]
+    $Progress = New-ProgressLine -Indent $Indent
+    $Percent = -1
+    $ChangedAt = Get-Date
+    $Proc = $null
+    try {
+        $Proc = [System.Diagnostics.Process]::Start($Info)
+        # Drained alongside, because a full stderr pipe would stall DISM.
+        $ErrorText = $Proc.StandardError.ReadToEndAsync()
+        $NextLine = $Proc.StandardOutput.ReadLineAsync()
+        while ($true) {
+            if ($NextLine.Wait(1000)) {
+                $Line = $NextLine.Result
+                if ($null -eq $Line) { break }
+                $Output.Add($Line)
+                $Found = Get-DismPercent -Line $Line
+                if ($null -ne $Found -and $Found -ne $Percent) { $Percent = $Found; $ChangedAt = Get-Date }
+                $NextLine = $Proc.StandardOutput.ReadLineAsync()
+            }
+            $Now = Get-Date
+            Update-ProgressLine -State $Progress -Percent $Percent -Detail (Format-DismProgressDetail -Percent $Percent -Elapsed ($Now - $Progress.Start) -Unchanged ($Now - $ChangedAt))
+        }
+        $Proc.WaitForExit()
+        foreach ($Line in ($ErrorText.Result -split '\r?\n')) { if ($Line) { $Output.Add($Line) } }
+        $global:LASTEXITCODE = $Proc.ExitCode
+    }
+    finally {
+        Clear-ProgressLine -State $Progress
+        if ($Proc) { $Proc.Dispose() }
+    }
+
+    if ($FailureMessage) { Assert-DismSuccess -Output $Output.ToArray() -ExitCode $LASTEXITCODE -FailureMessage $FailureMessage }
+    return $Output.ToArray()
 }
 
 # Throws unless DISM ended in success or "restart needed", with the message followed by DISM's error code
@@ -3805,6 +3862,8 @@ function Invoke-WatchedProcess {
     $Percent = $null
     $Stage = $null
     $StageFrom = [long]0
+    $Shown = $null
+    $ShownAt = Get-Date
     try {
         $Proc = Start-Process -FilePath $FilePath -ArgumentList $Arguments -NoNewWindow -PassThru -RedirectStandardOutput $OutFile -RedirectStandardError $ErrFile -ErrorAction Stop
         # Read once now, because without the handle the exit code can come back empty once the process is gone.
@@ -3848,7 +3907,11 @@ function Invoke-WatchedProcess {
             $Elapsed = Format-Duration ((Get-Date) - $Progress.Start)
             $Grown = $Written - $StageFrom
             $Amount = if ($Grown -ge 1GB) { '{0:N2} GB' -f ($Grown / 1GB) } elseif ($Grown -ge 1MB) { '{0:N0} MB' -f ($Grown / 1MB) } else { $null }
+            if ("$Percent|$Stage" -ne $Shown) { $Shown = "$Percent|$Stage"; $ShownAt = Get-Date }
             if ($null -ne $Percent) {
+                # Called out once it has sat long enough to look like a hang, as Format-DismProgressDetail does.
+                $Unchanged = (Get-Date) - $ShownAt
+                if ($Unchanged.TotalSeconds -ge 60) { $Elapsed = "$Elapsed, still working (no change for $(Format-Duration ([TimeSpan]::FromSeconds([math]::Floor($Unchanged.TotalSeconds)))))" }
                 $Detail = if ($Stage -and $Amount) { "${Stage}: $Amount written, $Elapsed" }
                           elseif ($Stage) { "$Stage, $Elapsed" }
                           elseif ($Amount) { "$Amount written, $Elapsed" }
@@ -3920,6 +3983,64 @@ function Save-MountedImage {
     Assert-DismSuccess -Output $Result.Output -ExitCode $Result.ExitCode -FailureMessage "Could not commit and unmount the image at $Path"
 }
 
+# The names of the files inside a cabinet. An .msu is one too.
+function Get-CabFileList {
+    param([Parameter(Mandatory)][string]$Path)
+    return @(& expand.exe -D "$Path" 2>$null | ForEach-Object {
+            if ("$_" -match '(?i)\.(?:msu|cab):\s+(.+?)\s*$') { $Matches[1] }
+        })
+}
+
+# Copies the servicing stack update packed inside a combined update out to $Destination and returns the .cab, or
+# $null when the package carries none. Listed first rather than extracted with a wildcard, because pulling every
+# cab out would unpack the multi-GB cumulative update as well.
+function Expand-ServicingStack {
+    param(
+        [Parameter(Mandatory)][string]$PackagePath,
+        [Parameter(Mandatory)][string]$Destination
+    )
+    $Name = @(Get-CabFileList -Path $PackagePath | Where-Object { $_ -match '(?i)^ssu-.*\.cab$|servicingstack.*\.cab$' }) | Select-Object -First 1
+    if (-not $Name) { return $null }
+    New-Item -ItemType Directory -Path $Destination -Force -ErrorAction Stop | Out-Null
+    & expand.exe -R "$PackagePath" "-F:$Name" "$Destination" | Out-Null
+    return Get-Item -LiteralPath (Join-Path -Path $Destination -ChildPath $Name) -ErrorAction SilentlyContinue
+}
+
+# Whether a package is a servicing stack update on its own. Its file name does not say, so the root manifest is
+# read, where a servicing stack's identity is Package_for_ServicingStack_<n>. A combined update is not one, since
+# its stack is pulled out with Expand-ServicingStack instead.
+function Test-StandaloneServicingStack {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$WorkDir
+    )
+    # No servicing stack update comes near this, and reading a manifest out of a cumulative update means
+    # decompressing gigabytes to reach it.
+    if ((Get-Item -LiteralPath $Path).Length -gt 300MB) { return $false }
+    $Temp = Join-Path -Path $WorkDir -ChildPath ('ssucheck_' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    try {
+        New-Item -ItemType Directory -Path $Temp -Force -ErrorAction Stop | Out-Null
+        $Cab = $Path
+        if ($Path -match '(?i)\.msu$') {
+            $Names = @(Get-CabFileList -Path $Path)
+            if ($Names | Where-Object { $_ -match '(?i)^ssu-' }) { return $false }
+            $Inner = $Names | Where-Object { $_ -match '(?i)\.cab$' -and $_ -notmatch '(?i)^wsusscan\.cab$' } | Select-Object -First 1
+            if (-not $Inner) { return $false }
+            & expand.exe -R "$Path" "-F:$Inner" "$Temp" | Out-Null
+            $Cab = Join-Path -Path $Temp -ChildPath $Inner
+            if (-not (Test-Path -LiteralPath $Cab)) { return $false }
+        }
+        $MumDir = Join-Path -Path $Temp -ChildPath 'mum'
+        New-Item -ItemType Directory -Path $MumDir -Force -ErrorAction Stop | Out-Null
+        & expand.exe -R "$Cab" '-F:update.mum' "$MumDir" | Out-Null
+        $Mum = Join-Path -Path $MumDir -ChildPath 'update.mum'
+        if (-not (Test-Path -LiteralPath $Mum)) { return $false }
+        return [bool](Select-String -LiteralPath $Mum -Pattern 'Package_for_ServicingStack' -SimpleMatch -Quiet)
+    }
+    catch { return $false }
+    finally { Remove-Item -LiteralPath $Temp -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
 # Pulls the servicing stack update out of a combined SSU+LCU .msu and applies it on its own. Windows rejects
 # a cumulative update with 0x800F0823 when the image's stack is older than the update needs, and DISM does
 # not always take the stack out of the combined package by itself when servicing offline.
@@ -3934,19 +4055,7 @@ function Add-ServicingStack {
     $SsuDir = Join-Path -Path $StageDir -ChildPath 'ssu'
     $LogArgs = @(if ($LogPath) { "/LogPath:$LogPath" })
     try {
-        New-Item -ItemType Directory -Path $SsuDir -Force -ErrorAction Stop | Out-Null
-
-        # Try the usual SSU-*.cab name first, because pulling every cab out unpacks the multi-GB LCU payload
-        # as well.
-        $Ssu = $null
-        foreach ($Pattern in @('-F:*SSU*.cab', '-F:*.cab')) {
-            & expand.exe "$PackagePath" $Pattern "$SsuDir" | Out-Null
-            $Ssu = Get-ChildItem -LiteralPath $SsuDir -Filter '*.cab' -File -ErrorAction SilentlyContinue |
-                Where-Object { $_.Name -match '(?i)ssu|servicingstack' } |
-                Sort-Object -Property Length -Descending |
-                Select-Object -First 1
-            if ($Ssu) { break }
-        }
+        $Ssu = Expand-ServicingStack -PackagePath $PackagePath -Destination $SsuDir
         if (-not $Ssu) {
             Write-HostTimestamp '      No servicing stack package is bundled inside this update, so it cannot be applied on its own.' -ForegroundColor DarkYellow
             return $false
@@ -3954,11 +4063,18 @@ function Add-ServicingStack {
 
         Write-HostTimestamp "      Applying the bundled servicing stack update first: $($Ssu.Name)" -ForegroundColor DarkYellow
         Invoke-Dism -ArgumentList (@("/Image:$MountDir", '/Add-Package', "/PackagePath:$($Ssu.FullName)") + $LogArgs) | Out-Null
-        if ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq 3010) {
+        $SsuExit = $LASTEXITCODE
+        if ($SsuExit -eq 0 -or $SsuExit -eq 3010) {
             Write-HostTimestamp '      Servicing stack updated.' -ForegroundColor Green
             return $true
         }
-        Write-HostTimestamp "      The servicing stack update did not apply either (exit code $LASTEXITCODE)." -ForegroundColor DarkYellow
+        # DISM often installs the bundled stack itself on the failed first pass, so finding it already there is
+        # the stack being current, not a failure.
+        if ($SsuExit -eq -2146498530) {
+            Write-HostTimestamp '      The image already has this servicing stack.' -ForegroundColor DarkGray
+            return $true
+        }
+        Write-HostTimestamp "      The servicing stack update did not apply either (exit code $(Format-ExitCode $SsuExit))." -ForegroundColor DarkYellow
         return $false
     }
     catch {
@@ -3999,6 +4115,17 @@ function Add-ServicingResult {
     $script:TattooServicing.Add($Record)
 }
 
+# A discarded mount takes every package already applied to it along, so those records must stop saying Applied.
+function Set-ServicingResultDiscarded {
+    param([string[]]$Image)
+    foreach ($Record in $script:TattooServicing) {
+        if ($Image -contains "$($Record['Image'])" -and $Record['Result'] -eq 'Applied') {
+            $Record['Result'] = 'Failed'
+            $Record['Detail'] = 'Applied, then thrown away with the rest of the image after a later package left it unserviceable'
+        }
+    }
+}
+
 # The code DISM reported, as 0x followed by eight hex digits. Its own "Error: 0x..." line is preferred, because
 # the exit code is sometimes a generic one, and the exit code is the fallback.
 function Get-DismErrorCode {
@@ -4024,6 +4151,7 @@ function Get-DismErrorMeaning {
         '0X800F0831' { 'the image is missing an earlier update this one builds on'; break }
         '0X80070228' { "the image's files do not match their manifests, which usually means a repacked or UUP-built ISO rather than an official one"; break }
         '0X80073712' { "the image's component store is damaged"; break }
+        '0X80073713' { 'the image can no longer be serviced and has to be discarded'; break }
         '0X80070070' { 'there is not enough free disk space on the working drive'; break }
         '0X80070005' { 'access was denied, often because antivirus or another program is holding files in the mounted image'; break }
         '0X80070020' { 'another program has a file in the mounted image open, often antivirus, Explorer or the search indexer'; break }
@@ -4031,6 +4159,25 @@ function Get-DismErrorMeaning {
         '0X80070002' { 'DISM could not find a file it needed, such as the package itself or a checkpoint update staged with it'; break }
         default { $null }
     }
+}
+
+# DISM exit codes are HRESULTs, which print as a meaningless negative number in decimal.
+function Format-ExitCode {
+    param([int]$Code)
+    if ($Code -lt 0) { return '0x{0:X8}' -f $Code }
+    return "$Code"
+}
+
+# DISM says an image is past saving in words rather than with one code, and the code differs by failure. Once it
+# has, nothing more may be applied to that mount and it must never be committed.
+function Test-DismImageUnserviceable {
+    param(
+        [object[]]$Output,
+        [string]$LogPath
+    )
+    $Pattern = '(?i)no longer serviceable|Discard (the modified|this Windows) image'
+    if ((@($Output) -join "`n") -match $Pattern) { return $true }
+    return [bool](@(Get-DismLogError -Path $LogPath -Last 50) | Where-Object { $_ -match $Pattern })
 }
 
 # DISM's console output without its banner, progress bars and blank lines, which leaves its own account of what
@@ -4124,17 +4271,26 @@ function Add-UpdateGroup {
         $Extra = if ($Group.Count -gt 1) { " (+$($Group.Count - 1) prior checkpoint file(s) staged alongside)" } else { '' }
         Write-HostTimestamp "      Applying ${Label}: $(Split-Path -Leaf $Target)$Extra"
         Write-HostTimestamp '      Running DISM /Add-Package with the target as the sole package (this can take several minutes)...'
+        # Once a run, and only where the bar is drawn, since a log reader never sees it.
+        if (-not $script:DismProgressNoteShown -and (Get-ConsoleWidth) -gt 0) {
+            $script:DismProgressNoteShown = $true
+            Write-HostTimestamp "      Note: DISM's percentage is only a rough guide. Depending on the update it can sit at one figure for many minutes and then jump, so the time beside it keeps counting while DISM works." -ForegroundColor DarkGray
+        }
 
-        # Run DISM, and if it fails on the first try, retry once - transient issues (locked files, a busy
-        # servicing stack, a momentary I/O hiccup) often clear on a second attempt.
+        # One retry, because transient problems (a locked file, a busy servicing stack) often clear on a second
+        # attempt. 0x800F0823 means the image needs a newer servicing stack, so the one bundled in the update goes
+        # in before the retry. An image DISM calls unserviceable is never retried, because it cannot recover.
         $MaxAttempts = 2
+        $StackBroughtForward = $false
+        $Unserviceable = $false
         for ($Attempt = 1; $Attempt -le $MaxAttempts; $Attempt++) {
             $Output = Invoke-Dism -ArgumentList "/Image:$MountDir", '/Add-Package', "/PackagePath:$Target", "/LogPath:$DismLog"
             $ExitCode = $LASTEXITCODE
 
             if ($ExitCode -eq 0 -or $ExitCode -eq 3010) {
                 Write-HostTimestamp '      Applied.' -ForegroundColor Green
-                Add-ServicingResult -Image $ImageLabel -Package (Split-Path -Leaf $Target) -Result 'Applied' -Detail $RecordDetail -Checkpoints $Checkpoints
+                $AppliedDetail = if ($StackBroughtForward) { 'Applied after the servicing stack was brought forward (0x800F0823)' } else { $RecordDetail }
+                Add-ServicingResult -Image $ImageLabel -Package (Split-Path -Leaf $Target) -Result 'Applied' -Detail $AppliedDetail -Checkpoints $Checkpoints
                 return $true
             }
             if ($Output -match '0x800f081e') {
@@ -4142,25 +4298,24 @@ function Add-UpdateGroup {
                 Add-ServicingResult -Image $ImageLabel -Package (Split-Path -Leaf $Target) -Result 'Skipped' -Detail 'Already present or not applicable (0x800F081E)' -Checkpoints $Checkpoints
                 return $true
             }
+            if (Test-DismImageUnserviceable -Output $Output -LogPath $DismLog) {
+                $Unserviceable = $true
+                break
+            }
 
             if ($Attempt -lt $MaxAttempts) {
-                Write-HostTimestamp "      DISM /Add-Package failed (exit code $ExitCode). Retrying once..." -ForegroundColor DarkYellow
-                Start-Sleep -Seconds 5
+                if ($Output -match '0x800f0823') {
+                    Write-HostTimestamp '      DISM /Add-Package failed with 0x800F0823: the image needs a newer servicing stack first.' -ForegroundColor DarkYellow
+                    $StackBroughtForward = Add-ServicingStack -MountDir $MountDir -PackagePath $Target -StageDir $Stage -LogPath $DismLog
+                    Write-HostTimestamp '      Retrying the update...' -ForegroundColor DarkYellow
+                }
+                else {
+                    Write-HostTimestamp "      DISM /Add-Package failed (exit code $(Format-ExitCode $ExitCode)). Retrying once..." -ForegroundColor DarkYellow
+                    Start-Sleep -Seconds 5
+                }
             }
         }
-
-        # 0x800F0823 is CBS_E_NEW_SERVICING_STACK_REQUIRED, so retrying the same package can never work
-        # until the image's servicing stack is brought forward.
-        if (($Output -match '0x800f0823') -and (Add-ServicingStack -MountDir $MountDir -PackagePath $Target -StageDir $Stage -LogPath $DismLog)) {
-            Write-HostTimestamp '      Retrying the update now the servicing stack is current...' -ForegroundColor DarkYellow
-            $Output = Invoke-Dism -ArgumentList "/Image:$MountDir", '/Add-Package', "/PackagePath:$Target", "/LogPath:$DismLog"
-            $ExitCode = $LASTEXITCODE
-            if ($ExitCode -eq 0 -or $ExitCode -eq 3010) {
-                Write-HostTimestamp '      Applied.' -ForegroundColor Green
-                Add-ServicingResult -Image $ImageLabel -Package (Split-Path -Leaf $Target) -Result 'Applied' -Detail 'Applied after the servicing stack was brought forward (0x800F0823)' -Checkpoints $Checkpoints
-                return $true
-            }
-        }
+        if ($Unserviceable) { $script:ImageUnserviceable = $true }
 
         $PackageName = Split-Path -Leaf $Target
         $Code = Get-DismErrorCode -Output $Output -ExitCode $ExitCode
@@ -4181,14 +4336,19 @@ function Add-UpdateGroup {
         else { Write-HostTimestamp '      Details are in C:\Windows\Logs\DISM\dism.log.' -ForegroundColor DarkYellow }
         $Detail = "DISM error $Code$(if ($Meaning) { ": $Meaning" })"
         Add-ServicingResult -Image $ImageLabel -Package $PackageName -Result 'Failed' -Detail $Detail -Checkpoints $Checkpoints
-        # Both failures mention "Unattend.xml", which is a red herring, so the error code decides the advice.
-        if ($Output -match '0x800f0823') {
+        # Most failures mention "Unattend.xml", which is a red herring, so the error code decides the advice.
+        if ($Unserviceable) {
+            Write-HostTimestamp '      Tip: DISM reports this image can no longer be serviced, so it will be discarded rather than saved' -ForegroundColor DarkGray
+            Write-HostTimestamp '      and keeps exactly what the source media had. Base media much older than the update, or media' -ForegroundColor DarkGray
+            Write-HostTimestamp '      that was repacked, is the usual cause. Newer official media usually resolves it.' -ForegroundColor DarkGray
+        }
+        elseif ($Output -match '0x800f0823') {
             Write-HostTimestamp '      Tip: 0x800F0823 means the image needs a newer servicing stack than it has, and the one' -ForegroundColor DarkGray
             Write-HostTimestamp '      bundled in this update did not take. Base media several years older than the update is the' -ForegroundColor DarkGray
             Write-HostTimestamp '      usual cause. Try newer media, or apply the standalone SSU for this release to the mounted' -ForegroundColor DarkGray
             Write-HostTimestamp '      image by hand before re-running.' -ForegroundColor DarkGray
         }
-        elseif ($Output -match '0x80070228' -or $Output -match '(?i)Unattend\.xml') {
+        elseif ($Output -match '0x80070228') {
             # A hash mismatch here just means the base image's files don't match their manifests - usually a
             # repacked/UUP ISO rather than a clean Microsoft one. It's informational, not a crash.
             Write-HostTimestamp '      Tip: this is typically the base image, not the update - the install.wim files did not match' -ForegroundColor DarkGray
@@ -5458,11 +5618,12 @@ if (-not $HaveRunMutex) {
 Clear-StaleDefenderExclusion
 
 # Add-UpdateGroup stages each package in its own pkgstage_* folder, the serviced recovery image waits in
-# WinRECache, and -RecoveryIsoPath assembles its media in RecoveryMedia. All are deleted when the step that
+# WinRECache, -RecoveryIsoPath assembles its media in RecoveryMedia, and a servicing stack pulled out of an
+# update waits in ServicingStack (or ssucheck_* while a package is being identified). All are deleted when the step that
 # made them finishes, but a run that was killed outright never reaches that and leaves several GB behind.
 # Cleared before the free space check so the reading reflects what is really available.
 $StaleStages = @(Get-ChildItem -LiteralPath $WorkRoot -Directory -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -like 'pkgstage_*' -or $_.Name -in 'WinRECache', 'RecoveryMedia' })
+    Where-Object { $_.Name -like 'pkgstage_*' -or $_.Name -like 'ssucheck_*' -or $_.Name -in 'WinRECache', 'RecoveryMedia', 'ServicingStack' })
 if ($StaleStages.Count -gt 0) {
     $StageFreedMB = 0
     $StageRemoved = 0
@@ -6181,7 +6342,9 @@ if ($RecoveryIsoOnly) {
                     Reset-MountDirectory -Path $WinReMount -ImagePath $script:RecoveryWinRe
                     try {
                         Mount-WindowsImage -ImagePath $script:RecoveryWinRe -Index 1 -Path $WinReMount -ErrorAction Stop | Out-Null
+                        $script:ImageUnserviceable = $false
                         Add-UpdateGroup -MountDir $WinReMount -Group @($script:SafeOs) -Label 'Safe OS Dynamic Update' | Out-Null
+                        if ($script:ImageUnserviceable) { throw 'DISM reports the recovery image can no longer be serviced, so it was discarded' }
                         Write-HostTimestamp '      Cleaning up the recovery image component store (/StartComponentCleanup /ResetBase)...'
                         Invoke-Dism -ArgumentList "/Image:$WinReMount", '/Cleanup-Image', '/StartComponentCleanup', '/ResetBase' | Out-Null
                         New-Item -ItemType Directory -Path $RecoveryBootManagers -Force -ErrorAction Stop | Out-Null
@@ -6539,6 +6702,8 @@ if (-not $NoStamp -and $script:ExpectedUpdateFor -ne "$FeatureName|$CatalogArch"
 # group is [checkpoint..., LCU]). Groups are applied independently with the documented sole-target method.
 $UpdateGroups = New-Object System.Collections.Generic.List[object]
 $SafeOsGroup = $null
+# The groups that are a servicing stack update, which go in ahead of the rest and are labelled as such.
+$script:ServicingStackFiles = New-Object System.Collections.Generic.List[string]
 $script:SetupDu = $null
 # The Safe OS KB and the builds it delivers, shared so the per-edition WinRE check asks the support page once.
 $script:SafeOsKb = $null
@@ -6562,7 +6727,18 @@ elseif ($UpdatePath) {
     # Treat the supplied files as one group ordered by KB ascending, so the latest (target) is applied last
     # and any prior checkpoints are staged alongside it.
     $OrderedUserFiles = @($script:UpdateFiles | Sort-Object { if ((Split-Path -Leaf $_) -match '(?i)kb(\d{6,})') { [int]$Matches[1] } else { 0 } })
-    $UpdateGroups.Add($OrderedUserFiles)
+    # A standalone servicing stack update usually has the lower KB, so in the group it would only be staged
+    # beside the target and never applied. It goes in on its own, first.
+    $UserRest = @()
+    foreach ($File in $OrderedUserFiles) {
+        if (Test-StandaloneServicingStack -Path $File -WorkDir $WorkRoot) {
+            Write-HostTimestamp "  $(Split-Path -Leaf $File) is a servicing stack update, so it is applied on its own before the others." -ForegroundColor Green
+            $UpdateGroups.Add(@($File))
+            $script:ServicingStackFiles.Add($File)
+        }
+        else { $UserRest += $File }
+    }
+    if ($UserRest.Count -gt 0) { $UpdateGroups.Add($UserRest) }
     Write-Host $LineBreak
 }
 else {
@@ -6632,7 +6808,9 @@ else {
             $Query = "Cumulative Update for .NET Framework $(Get-CatalogProductQuery -FeatureUpdate $FeatureName) for $CatalogArch"
             $script:DotNet = Get-LatestCatalogPackage -Query $Query -DownloadDir $DlDir -TitleInclude '(?i)\.net framework' -TitleExclude '(?i)dynamic update' -AllowPreview:$IncludePreview
         }
-        if ($script:DotNet) { $UpdateGroups.Add(@($script:DotNet)) }
+        # One group each, because the packages are for different .NET versions (4.8 and 4.8.1 on Windows 10 and
+        # Server 2022), not a checkpoint chain. Grouped, only the last one reached DISM.
+        if ($script:DotNet) { foreach ($Package in @($script:DotNet)) { $UpdateGroups.Add(@($Package)) } }
         else {
             Write-HostTimestamp '  No .NET cumulative update was integrated (none found).' -ForegroundColor Yellow
             Write-Host $LineBreak
@@ -6703,6 +6881,29 @@ if ($script:SetupDu) { $script:StampUpdateFiles += @($script:SetupDu) }
 if ($SafeOsGroup) { $script:StampUpdateFiles += @($SafeOsGroup) }
 # Hashed here, once, because both the media tattoo and the build stamp describe the same packages.
 $script:UpdateFileRecords = @(Get-UpdateFileRecords -Paths $script:StampUpdateFiles -DownloadDir $DlDir)
+
+# The servicing stack bundled in a combined update goes in ahead of everything, rather than only after a
+# 0x800F0823, because the attempt that discovers an out-of-date stack can leave the image unserviceable.
+# Extracted once here instead of once per image, and after the stamp, because it is part of a file already in it.
+$ServicingStackDir = Join-Path -Path $WorkRoot -ChildPath 'ServicingStack'
+Remove-Item -LiteralPath $ServicingStackDir -Recurse -Force -ErrorAction SilentlyContinue
+$BundledStacks = @()
+foreach ($Group in $UpdateGroups.ToArray()) {
+    $Target = "$(@($Group)[-1])"
+    if ($Target -notmatch '(?i)\.msu$' -or $script:ServicingStackFiles.Contains($Target)) { continue }
+    $Stack = $null
+    try { $Stack = Expand-ServicingStack -PackagePath $Target -Destination (Join-Path -Path $ServicingStackDir -ChildPath ([IO.Path]::GetFileNameWithoutExtension($Target))) }
+    catch { Write-HostTimestamp "Could not extract the servicing stack from $(Split-Path -Leaf $Target): $($_.Exception.Message)" -ForegroundColor Yellow }
+    if ($Stack) {
+        Write-HostTimestamp "$(Split-Path -Leaf $Target) carries servicing stack update $($Stack.Name), which is applied to each image before the updates."
+        $BundledStacks += $Stack.FullName
+    }
+}
+for ($i = $BundledStacks.Count - 1; $i -ge 0; $i--) {
+    $UpdateGroups.Insert(0, @($BundledStacks[$i]))
+    $script:ServicingStackFiles.Add($BundledStacks[$i])
+}
+if ($BundledStacks.Count -gt 0) { Write-Host $LineBreak }
 
 #endregion
 
@@ -6851,7 +7052,9 @@ if ($UpdateGroups.Count -gt 0 -or $script:DriverInfFiles.Count -gt 0) {
                                 Set-ItemProperty -LiteralPath $WinReWim -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
                                 Write-HostTimestamp '    Servicing the recovery image (winre.wim)...'
                                 Mount-WindowsImage -ImagePath $WinReWim -Index 1 -Path $WinReMount -ErrorAction Stop | Out-Null
+                                $script:ImageUnserviceable = $false
                                 Add-UpdateGroup -MountDir $WinReMount -Group $SafeOsGroup -Label 'Safe OS Dynamic Update' -ImageLabel $WinReLabel | Out-Null
+                                if ($script:ImageUnserviceable) { throw 'DISM reports the recovery image can no longer be serviced, so it was discarded' }
                                 Write-HostTimestamp '      Cleaning up the recovery image component store (/StartComponentCleanup /ResetBase)...'
                                 Invoke-Dism -ArgumentList "/Image:$WinReMount", '/Cleanup-Image', '/StartComponentCleanup', '/ResetBase' | Out-Null
                                 Remove-ImageResidue -MountDir $WinReMount
@@ -6870,7 +7073,8 @@ if ($UpdateGroups.Count -gt 0 -or $script:DriverInfFiles.Count -gt 0) {
                                 # Deliberately not fatal. A recovery image that will not service must never cost
                                 # the user the ISO, so the edition keeps the winre.wim it shipped with.
                                 Write-HostTimestamp "      WinRE servicing failed: $($_.Exception.Message). This edition keeps the recovery image it shipped with." -ForegroundColor Yellow
-                                Add-ServicingResult -Image $WinReLabel -Package 'Safe OS Dynamic Update' -Result 'Failed' -Detail $_.Exception.Message
+                                # Add-UpdateGroup has already recorded the package that broke it.
+                                if (-not $script:ImageUnserviceable) { Add-ServicingResult -Image $WinReLabel -Package 'Safe OS Dynamic Update' -Result 'Failed' -Detail $_.Exception.Message }
                                 Dismount-ImageDiscard -Path $WinReMount | Out-Null
                             }
                         }
@@ -6879,8 +7083,27 @@ if ($UpdateGroups.Count -gt 0 -or $script:DriverInfFiles.Count -gt 0) {
 
                 Write-HostTimestamp '    Applying updates to install.wim...'
                 $script:InstallApplyOk = $true
+                $script:ImageUnserviceable = $false
+                $InstallLabel = "install.wim index $Index ($EditionName)"
                 foreach ($Group in $UpdateGroups) {
-                    if (-not (Add-UpdateGroup -MountDir $MountDir -Group $Group -ImageLabel "install.wim index $Index ($EditionName)")) { $script:InstallApplyOk = $false }
+                    # A servicing stack that will not go in is not the update missing, and the update's own
+                    # 0x800F0823 handling still gets a turn.
+                    $IsStack = $script:ServicingStackFiles.Contains("$(@($Group)[-1])")
+                    $GroupLabel = if ($IsStack) { 'servicing stack update' } else { 'update package' }
+                    if (-not (Add-UpdateGroup -MountDir $MountDir -Group $Group -Label $GroupLabel -ImageLabel $InstallLabel) -and -not $IsStack) { $script:InstallApplyOk = $false }
+                    if ($script:ImageUnserviceable) { break }
+                }
+                # Committing would ship an image DISM has said is broken, which is worse than an unpatched one.
+                if ($script:ImageUnserviceable) {
+                    $script:ServicingFailures++
+                    Write-HostTimestamp "    DISM left index $Index ($EditionName) unserviceable, so it is being discarded. This edition ships exactly as the source media had it, with no updates or drivers added." -ForegroundColor Yellow
+                    Dismount-ImageDiscard -Path $MountDir | Out-Null
+                    Set-ServicingResultDiscarded -Image @($InstallLabel, $WinReLabel)
+                    if ($WinReBefore) { Add-WinReVersionSample -Label $WinReVersionLabel -Version $WinReBefore.Version }
+                    $OriginalBuild = "$ImageVersionText$(if ($FeatureName) { " ($FeatureName)" })"
+                    $script:EditionBuilds.Add([ordered]@{ Index = [int]$Index; Edition = "$EditionName"; Build = $OriginalBuild })
+                    if (-not $script:FinalBuildString) { $script:FinalBuildString = $OriginalBuild }
+                    return
                 }
                 if (-not $script:InstallApplyOk) {
                     $script:ServicingFailures++
@@ -6952,7 +7175,22 @@ if ($UpdateGroups.Count -gt 0 -or $script:DriverInfFiles.Count -gt 0) {
                 try {
                     Reset-MountDirectory -Path $MountDir -ImagePath $BootWim
                     Mount-WindowsImage -ImagePath $BootWim -Index $BootImg.ImageIndex -Path $MountDir -ErrorAction Stop | Out-Null
-                    foreach ($Group in $UpdateGroups) { Add-UpdateGroup -MountDir $MountDir -Group $Group -ImageLabel "boot.wim index $($BootImg.ImageIndex) ($($BootImg.ImageName))" | Out-Null }
+                    $BootLabel = "boot.wim index $($BootImg.ImageIndex) ($($BootImg.ImageName))"
+                    $script:ImageUnserviceable = $false
+                    foreach ($Group in $UpdateGroups) {
+                        $GroupLabel = if ($script:ServicingStackFiles.Contains("$(@($Group)[-1])")) { 'servicing stack update' } else { 'update package' }
+                        Add-UpdateGroup -MountDir $MountDir -Group $Group -Label $GroupLabel -ImageLabel $BootLabel | Out-Null
+                        if ($script:ImageUnserviceable) { break }
+                    }
+                    # The media's loose Setup files are only replaced from index 2 when it was saved, so a discarded
+                    # index 2 leaves them matching the boot.wim that ships.
+                    if ($script:ImageUnserviceable) {
+                        $script:ServicingFailures++
+                        Write-HostTimestamp "    DISM left $BootLabel unserviceable, so it is being discarded and ships as the source media had it." -ForegroundColor Yellow
+                        Dismount-ImageDiscard -Path $MountDir | Out-Null
+                        Set-ServicingResultDiscarded -Image @($BootLabel)
+                        return
+                    }
                     # Only index 2 needs the drivers: that is the image Setup boots into, and it has to see
                     # the disk and the network card. Index 1 is loaded into a RAM disk and never installs.
                     if ([int]$BootImg.ImageIndex -eq 2) {
@@ -7576,6 +7814,7 @@ Show-WimSizeComparison
 Invoke-Task -Description 'Cleaning up the working extraction folder...' -ScriptBlock {
     try {
         Remove-Item -LiteralPath $ExtractDir -Recurse -Force -ErrorAction Stop
+        Remove-Item -LiteralPath (Join-Path -Path $WorkRoot -ChildPath 'ServicingStack') -Recurse -Force -ErrorAction SilentlyContinue
         Write-HostTimestamp '  Removed the extracted media.' -ForegroundColor Green
     }
     catch {

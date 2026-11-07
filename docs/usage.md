@@ -238,6 +238,10 @@ Every kept edition is serviced by default, so a two-edition build takes roughly 
 
 `-KeepEditions` accepts edition names (partial matches allowed) or index numbers, and overrides the default. Only the kept editions are serviced and re-exported, so the removed editions are gone from the final `install.wim`. If none of your values match any edition in the ISO, all editions are kept instead (the script prints a warning and lists the available editions). A partial mismatch (some values match, some don't) exits with error 1. It works with `-SkipUpdates` too, if you only want to trim editions without integrating updates.
 
+## Watching a Build's Progress
+
+While DISM works, a progress line shows its percentage and how long the step has taken. Treat the percentage as a rough guide. How DISM counts depends on the update, so a cumulative update can sit at one figure for many minutes and then jump, and a commit says nothing at all for its first few minutes. The time keeps counting every second while DISM is running, and after a minute at one figure the line adds `still working (no change for ...)`, so a quiet stretch is easy to tell from a hang. If the time itself stops counting, check that the console window is not in selection mode: a click inside it starts selecting text, which pauses the script until you press `Esc`.
+
 ## Speeding Up a Build
 
 DISM has no setting that makes it faster, but most of a build's time goes on things you can choose. In order of how much they usually save:

@@ -4,9 +4,9 @@ BeforeAll {
     $ScriptFile = Join-Path -Path $PSScriptRoot -ChildPath '..\Windows-ISO-Updater.ps1'
     $Ast = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path -LiteralPath $ScriptFile).Path, [ref]$null, [ref]$null)
     $Names = @(
-        'ConvertFrom-HotpatchCalendar', 'Read-ConfigFile', 'Format-ShortHash', 'Get-BuildParameterHash', 'Get-DefaultIsoName', 'Get-EditionRank', 'Get-EditionShortName',
-        'Get-DismErrorCode', 'Get-DismErrorMeaning', 'Get-DismLogError', 'Get-DismMessage', 'Save-DismLog',
-        'Format-ByteProgress', 'Format-Duration', 'Format-ProgressLine', 'Format-WrappedText', 'Get-DismPercent', 'Get-FileDownload', 'Get-RobocopyPercent', 'Test-BitsUsable', 'Test-PathInList', 'Get-WinHttpProxy', 'Test-VirtualMachineModel', 'Format-Gigabytes', 'Format-Uptime', 'Get-HotpatchBaselineKb', 'Get-PatchTuesdayStart', 'Get-ScheduledTaskArgumentString', 'Get-ScriptCommandLine', 'Get-TextSha256',
+        'ConvertFrom-HotpatchCalendar', 'Read-ConfigFile', 'Format-ShortHash', 'Get-BuildParameterHash', 'Get-DefaultIsoName', 'Get-EditionRank', 'Get-EditionShortName', 'Get-FeatureUpdateName',
+        'Get-DismErrorCode', 'Get-DismErrorMeaning', 'Get-DismLogError', 'Get-DismMessage', 'Save-DismLog', 'Format-ExitCode', 'Test-DismImageUnserviceable', 'Get-CabFileList', 'Expand-ServicingStack', 'Test-StandaloneServicingStack',
+        'Format-ByteProgress', 'Format-DismProgressDetail', 'Format-Duration', 'Format-ProgressLine', 'Format-WrappedText', 'Get-DismPercent', 'Get-FileDownload', 'Get-RobocopyPercent', 'Test-BitsUsable', 'Test-PathInList', 'Get-WinHttpProxy', 'Test-VirtualMachineModel', 'Format-Gigabytes', 'Format-Uptime', 'Get-HotpatchBaselineKb', 'Get-PatchTuesdayStart', 'Get-ScheduledTaskArgumentString', 'Get-ScriptCommandLine', 'Get-TextSha256',
         'Resolve-EditionIndexes', 'Search-UpdateCatalog', 'Select-DefaultEditions', 'Select-HotpatchBaselineEntry', 'Test-FidoUrl', 'Test-IsHotpatchBaseline',
         'Test-MicrosoftDownloadUrl', 'Test-RebuildNeeded', 'Test-SameWriteTime', 'Test-UpdatePackageFile'
     )
@@ -333,6 +333,88 @@ Describe 'Reporting a DISM failure' {
         @(Get-DismLogError -Path (Join-Path -Path $TestDrive -ChildPath 'missing.log')).Count | Should -Be 0
     }
 
+    It 'writes a negative exit code as hex and leaves the others alone' {
+        Format-ExitCode -Code -2146498525 | Should -Be '0x800F0823'
+        Format-ExitCode -Code 3010 | Should -Be '3010'
+    }
+
+    It 'spots an image DISM says to discard, from its console output' {
+        $Output = @('The specified image is no longer serviceable and may be corrupted.', 'Discard the modified image and start again.', 'Error: 0x80073713')
+        Test-DismImageUnserviceable -Output $Output | Should -BeTrue
+    }
+
+    It 'spots an image DISM says to discard, from its log alone' {
+        $Log = Join-Path -Path $TestDrive -ChildPath 'discard.log'
+        Set-Content -LiteralPath $Log -Value '2026-11-07 11:42:23, Error                 DISM   DISM Package Manager: PID=4936 TID=9320 Discard this Windows image and try the operation again on a new Windows image. - GetCbsErrorMsg'
+        Test-DismImageUnserviceable -Output @('Error: 0x800f0830') -LogPath $Log | Should -BeTrue
+    }
+
+    It 'does not treat an ordinary failure as unserviceable' {
+        Test-DismImageUnserviceable -Output $script:DismOutput -LogPath (Join-Path -Path $TestDrive -ChildPath 'missing.log') | Should -BeFalse
+    }
+}
+
+# Real update packages are hundreds of megabytes, so these are built with makecab to the same layout: an .msu is a
+# cabinet of cabinets, and each package cabinet carries an update.mum naming the package.
+Describe 'Servicing stack packages' {
+    BeforeAll {
+        function New-TestCabinet {
+            param([string]$Path, [string[]]$Files)
+            $Ddf = "$Path.ddf"
+            Set-Content -LiteralPath $Ddf -Value (@(
+                    ".Set CabinetNameTemplate=$(Split-Path -Leaf $Path)", ".Set DiskDirectoryTemplate=$(Split-Path -Parent $Path)",
+                    '.Set Cabinet=on', '.Set Compress=on', '.Set RptFileName=nul', '.Set InfFileName=nul'
+                ) + @($Files | ForEach-Object { "`"$_`"" }))
+            makecab.exe /F $Ddf | Out-Null
+            Remove-Item -LiteralPath $Ddf
+        }
+        $script:Pkg = Join-Path -Path $TestDrive -ChildPath 'packages'
+        New-Item -ItemType Directory -Path $script:Pkg | Out-Null
+        $Mum = Join-Path -Path $script:Pkg -ChildPath 'update.mum'
+        Set-Content -LiteralPath (Join-Path $script:Pkg 'WSUSSCAN.cab') -Value 'x'
+
+        Set-Content -LiteralPath $Mum -Value '<assembly><assemblyIdentity name="Package_for_ServicingStack_1161" /></assembly>'
+        New-TestCabinet -Path (Join-Path $script:Pkg 'Windows10.0-KB5005260-x64.cab') -Files $Mum
+        New-TestCabinet -Path (Join-Path $script:Pkg 'windows10.0-kb5005260-x64.msu') -Files (Join-Path $script:Pkg 'Windows10.0-KB5005260-x64.cab'), (Join-Path $script:Pkg 'WSUSSCAN.cab')
+        Copy-Item -LiteralPath (Join-Path $script:Pkg 'Windows10.0-KB5005260-x64.cab') -Destination (Join-Path $script:Pkg 'SSU-19041.7801-x64.cab')
+
+        Set-Content -LiteralPath $Mum -Value '<assembly><assemblyIdentity name="Package_for_RollupFix" /></assembly>'
+        New-TestCabinet -Path (Join-Path $script:Pkg 'Windows10.0-KB5134125-x64.cab') -Files $Mum
+        New-TestCabinet -Path (Join-Path $script:Pkg 'windows10.0-kb5134125-x64.msu') -Files (Join-Path $script:Pkg 'SSU-19041.7801-x64.cab'), (Join-Path $script:Pkg 'Windows10.0-KB5134125-x64.cab'), (Join-Path $script:Pkg 'WSUSSCAN.cab')
+        New-TestCabinet -Path (Join-Path $script:Pkg 'windows10.0-kb5127683-x64-ndp48.msu') -Files (Join-Path $script:Pkg 'Windows10.0-KB5134125-x64.cab')
+    }
+
+    It 'lists the files inside an .msu' {
+        Get-CabFileList -Path (Join-Path $script:Pkg 'windows10.0-kb5134125-x64.msu') | Should -Be @('SSU-19041.7801-x64.cab', 'Windows10.0-KB5134125-x64.cab', 'WSUSSCAN.cab')
+    }
+
+    It 'pulls out only the servicing stack from a combined update' {
+        $Out = Join-Path -Path $TestDrive -ChildPath 'bundled'
+        $Stack = Expand-ServicingStack -PackagePath (Join-Path $script:Pkg 'windows10.0-kb5134125-x64.msu') -Destination $Out
+        $Stack.Name | Should -Be 'SSU-19041.7801-x64.cab'
+        @(Get-ChildItem -LiteralPath $Out).Count | Should -Be 1
+    }
+
+    It 'returns nothing for an update that bundles no servicing stack' {
+        Expand-ServicingStack -PackagePath (Join-Path $script:Pkg 'windows10.0-kb5127683-x64-ndp48.msu') -Destination (Join-Path $TestDrive 'none') | Should -BeNullOrEmpty
+    }
+
+    It 'recognises a standalone servicing stack update as <Name>' -TestCases @(
+        @{ Name = 'windows10.0-kb5005260-x64.msu' }
+        @{ Name = 'SSU-19041.7801-x64.cab' }
+    ) {
+        Test-StandaloneServicingStack -Path (Join-Path $script:Pkg $Name) -WorkDir $TestDrive | Should -BeTrue
+    }
+
+    It 'does not mistake <Name> for one' -TestCases @(
+        @{ Name = 'windows10.0-kb5134125-x64.msu' }
+        @{ Name = 'Windows10.0-KB5134125-x64.cab' }
+        @{ Name = 'windows10.0-kb5127683-x64-ndp48.msu' }
+    ) {
+        Test-StandaloneServicingStack -Path (Join-Path $script:Pkg $Name) -WorkDir $TestDrive | Should -BeFalse
+        @(Get-ChildItem -LiteralPath $TestDrive -Directory -Filter 'ssucheck_*').Count | Should -Be 0
+    }
+
     It 'saves a failed package''s log under the KB and the image' {
         $LogDir = Join-Path -Path $TestDrive -ChildPath 'Logs'
         $LogStamp = '2026-11-02_20-50-53'
@@ -627,6 +709,41 @@ Describe 'Resolve-EditionIndexes' {
         $Unmatched = $null
         Resolve-EditionIndexes -Images $script:Images -Tokens 'Home,Ultimate' -Unmatched ([ref]$Unmatched) | Should -Be @(1)
         @($Unmatched) | Should -Be @('Ultimate')
+    }
+}
+
+Describe 'Format-DismProgressDetail' {
+    It 'says it is working before DISM shows a percentage' {
+        Format-DismProgressDetail -Percent -1 -Elapsed ([TimeSpan]::FromSeconds(12.7)) -Unchanged 0 | Should -Be 'Working (12.0s)'
+    }
+
+    It 'shows only the time while the percentage is moving' {
+        Format-DismProgressDetail -Percent 40 -Elapsed ([TimeSpan]::FromSeconds(95)) -Unchanged ([TimeSpan]::FromSeconds(20)) | Should -Be '1m 35s'
+    }
+
+    It 'calls out a percentage that has not moved for a minute' {
+        Format-DismProgressDetail -Percent 40 -Elapsed ([TimeSpan]::FromSeconds(400)) -Unchanged ([TimeSpan]::FromSeconds(185.4)) | Should -Be '6m 40s, still working (no change for 3m 05s)'
+    }
+
+    It 'does not round the hours of a long step up' {
+        Format-Duration ([TimeSpan]::FromMinutes(96)) | Should -Be '1h 36m 00s'
+    }
+}
+
+Describe 'Get-FeatureUpdateName' {
+    It 'names build <Build> as <Name>' -TestCases @(
+        @{ Build = 26100; Name = '24H2' }
+        @{ Build = 19045; Name = '22H2' }
+        @{ Build = 19044; Name = '21H2' }
+        @{ Build = 19041; Name = '21H2' }
+        @{ Build = 19042; Name = '21H2' }
+        @{ Build = 19043; Name = '21H2' }
+    ) {
+        Get-FeatureUpdateName -Build $Build | Should -Be $Name
+    }
+
+    It 'returns nothing for a build it does not know' {
+        Get-FeatureUpdateName -Build 18363 | Should -BeNullOrEmpty
     }
 }
 
