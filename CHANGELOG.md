@@ -11,6 +11,7 @@ What changed in each release. Versions are dates, `yyyy.MM.dd.<revision>`. Relea
 
 ### Changed
 
+- `-UseFido` now runs Fido v1.72, which adds UEFI Shell 26H2 downloads and changes nothing about how Windows ISOs are fetched.
 - While DISM applies an update or cleans up an image, the time beside the progress bar now counts up every second, even when DISM prints nothing for minutes. Before, the line only changed when DISM's percentage did, so a long quiet stretch looked like a hang. After a minute at the same percentage, the line adds `still working (no change for ...)`, and committing and exporting an image do the same. A note before the first update explains that DISM's percentage is only a rough guide and can sit at one figure for a long time before jumping. See [Watching a Build's Progress](docs/usage.md#watching-a-builds-progress).
 
 ### Removed

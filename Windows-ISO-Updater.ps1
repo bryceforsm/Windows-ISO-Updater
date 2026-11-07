@@ -1,6 +1,6 @@
 # GENERATED FILE. Edit the files in src\ and run tools\Build-Script.ps1, because changes made here are overwritten.
 # Windows ISO Updater
-# Version: 2026.11.07.4   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
+# Version: 2026.11.07.5   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
 #
 #region Script overview
 # This script builds a fully up-to-date ("slipstreamed") Windows 11, Windows 10 or Windows Server
@@ -205,10 +205,10 @@ param(
     [switch]$UseFido,
 
     [Parameter(HelpMessage = 'Override the URL used to fetch the Fido download helper')]
-    [string]$FidoUrl = 'https://github.com/pbatard/Fido/raw/61668a81d1d9be66fae413352591196a780168a7/Fido.ps1',
+    [string]$FidoUrl = 'https://github.com/pbatard/Fido/raw/266084e3765ab8bf96767bd55c51b0ee70934551/Fido.ps1',
 
     [Parameter(HelpMessage = 'Expected SHA-256 of the downloaded Fido.ps1. Defaults to the pinned version. Pass an empty string to skip the hash check (needed if you override -FidoUrl without giving the new hash)')]
-    [string]$FidoSha256 = '6481E40D3CF100C79B281942D0D1C7F6D111397BE296FEC867A56CBE368EBDF9',
+    [string]$FidoSha256 = '89A26B4A8BE2721E610BA3F563EC44024E6CF7975938EE5B61D624D2BFBF4643',
 
     [Parameter(HelpMessage = 'How many extra attempts to make if Fido cannot resolve a download link (Microsoft''s anti-bot check often clears on a later attempt). Defaults to 2')]
     [ValidateRange(0, 10)]
@@ -314,7 +314,7 @@ $script:ScriptPath = $PSCommandPath
 
 # Kept in step with the header comment by tools\Update-Version.ps1, and shown in the log and recorded in
 # the build stamp so a finished ISO can be traced back to the exact script that built it.
-$ScriptVersion = '2026.11.07.4'
+$ScriptVersion = '2026.11.07.5'
 
 # A scheduled run has nobody to answer a prompt.
 if ($Scheduled) {
