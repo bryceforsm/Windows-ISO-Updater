@@ -10,7 +10,7 @@ error, and function rules apply to everything under `tools/` as well.
 
 **Source files.** Edit `src/`, then run `tools/Build-Script.ps1`. `Windows-ISO-Updater.ps1` is generated, so
 an edit made there is lost. The number in a file's name sets its position in the script: `01` to `03` are
-the header, parameters and startup, `10` to `26` the functions by topic, and `30` to `38` the main flow in
+the header, parameters and startup, `10` to `27` the functions by topic, and `30` to `38` the main flow in
 run order. A new file only needs a name that sorts into the right place.
 
 **Layout.** Sections are wrapped in `#region Section Name` / `#endregion` so they fold in VS Code. Order

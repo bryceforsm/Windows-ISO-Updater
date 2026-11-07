@@ -37,10 +37,12 @@ function Test-PathInList {
 
 # What Defender is doing on this machine: Active, Off (real-time protection is turned off), Passive (another
 # antivirus is the active one, so Defender's exclusions change nothing), or Unavailable.
+# Read from the WMI class Get-MpComputerStatus wraps, because loading the Defender module costs a second and
+# the environment report in every run's log header asks too.
 function Get-DefenderState {
-    if (-not (Get-Command -Name Add-MpPreference -ErrorAction SilentlyContinue)) { return 'Unavailable' }
-    try { $Status = Get-MpComputerStatus -ErrorAction Stop }
+    try { $Status = Get-CimInstance -Namespace 'root/Microsoft/Windows/Defender' -ClassName MSFT_MpComputerStatus -ErrorAction Stop }
     catch { return 'Unavailable' }
+    if (-not $Status) { return 'Unavailable' }
     # Older Windows 10 builds do not report a running mode at all, and are always the active antivirus.
     if ($Status.AMRunningMode -and "$($Status.AMRunningMode)" -ne 'Normal') { return 'Passive' }
     if (-not $Status.RealTimeProtectionEnabled) { return 'Off' }
@@ -166,6 +168,5 @@ function Clear-StaleDefenderExclusion {
         Write-HostTimestamp "Could not remove the Defender exclusions an interrupted run left behind: $($_.Exception.Message). Remove them in Windows Security if they are still listed." -ForegroundColor Yellow
     }
 }
-#endregion
 #endregion
 

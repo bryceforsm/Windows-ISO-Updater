@@ -4,6 +4,10 @@ What changed in each release. Versions are dates, `yyyy.MM.dd.<revision>`. Relea
 
 ## [Unreleased]
 
+### Added
+
+- Every run's log now starts with a short report on the machine: the Windows version and patch level, PowerShell and DISM versions, who the run is and whether BITS can work for it, the active antivirus, whether a restart is pending and when the machine last restarted, the working drive's file system, free space and disk type, any proxy, and the hardware. A log attached to an issue then answers the usual first questions. A restart pending for the servicing stack or Windows Update is shown in yellow, because it can make DISM fail. See [Logging](docs/reference.md#logging).
+
 ## [2026.11.06.8](https://github.com/bryceforsm/Windows-ISO-Updater/releases/tag/2026.11.06.8) - 2026-11-06
 
 ### Added

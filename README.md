@@ -134,7 +134,7 @@ Please also include:
 * Where the source ISO came from, for example the Microsoft website, the Evaluation Center or Visual Studio subscriptions
 
 > [!NOTE]
-> The logs record the computer name and the full paths the run used, which often include your Windows user name. Look them over and replace anything you would rather not post before attaching them. See [Logging](docs/reference.md#logging) for what each file contains.
+> The logs record the computer name, your Windows user name, the make and model of the computer, and the full paths the run used. Look them over and replace anything you would rather not post before attaching them. See [Logging](docs/reference.md#logging) for what each file contains.
 
 Issues and pull requests with no activity for 90 days are marked as stale and closed 14 days later. Any comment keeps one open.
 
