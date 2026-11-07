@@ -6,7 +6,10 @@ What changed in each release. Versions are dates, `yyyy.MM.dd.<revision>`. Relea
 
 ### Changed
 
-- While DISM applies an update or cleans up the component store, the console now shows its progress as a bar with a percentage and the time taken so far, instead of sitting silent for several minutes. The bar updates in place, is cleared when DISM finishes, and is not written to the transcript or the log.
+- The long steps now show a progress bar with a percentage, instead of sitting silent for several minutes: applying updates, cleaning up the component store, exporting and committing images, downloading the ISO and update packages, copying an ISO to or from a network share, and hashing the ISO. Downloads and copies also show how much has transferred and how fast. The bar updates in place, is cleared when the step finishes, and is not written to the transcript or the log.
+- Images are now exported and committed with `dism.exe` instead of the DISM PowerShell cmdlets, which is what makes their progress visible. A failure now reports DISM's error code and message.
+- A BITS download that receives nothing for five minutes now gives up and falls back to a direct download. Before, BITS could keep retrying a dead connection indefinitely.
+- When the run has a console, the transcript no longer gets a line at every 20% while the ISO is hashed, because the bar replaces them. A run without a console, such as a scheduled one, still logs them.
 - Long console lines now wrap between words instead of being cut mid-word at the edge of the window. The rest of a wrapped line is indented to start under the message, not under the timestamp. The transcript has the same line breaks, and the CMTrace log still has each message on one line.
 
 ## [2026.11.02.5](https://github.com/bryceforsm/Windows-ISO-Updater/releases/tag/2026.11.02.5) - 2026-11-02

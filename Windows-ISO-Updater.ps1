@@ -1,6 +1,6 @@
 # GENERATED FILE. Edit the files in src\ and run tools\Build-Script.ps1, because changes made here are overwritten.
 # Windows ISO Updater
-# Version: 2026.11.06.1   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
+# Version: 2026.11.06.2   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
 #
 #region Script overview
 # This script builds a fully up-to-date ("slipstreamed") Windows 11, Windows 10 or Windows Server
@@ -311,7 +311,7 @@ $script:ScriptPath = $PSCommandPath
 
 # Kept in step with the header comment by tools\Update-Version.ps1, and shown in the log and recorded in
 # the build stamp so a finished ISO can be traced back to the exact script that built it.
-$ScriptVersion = '2026.11.06.1'
+$ScriptVersion = '2026.11.06.2'
 
 # A scheduled run has nobody to answer a prompt.
 if ($Scheduled) {
@@ -772,6 +772,77 @@ function Format-WrappedText {
     return $Lines.ToArray()
 }
 
+# A progress line: one console line, such as "      [############--------]  47%  2m 13s", that is redrawn
+# in place while a long operation runs and cleared when it ends. It is written straight to the console rather
+# than through Write-Host, so it never reaches the transcript or the CMTrace log, and nothing is drawn when
+# output is redirected. New-ProgressLine starts one, Update-ProgressLine redraws it, Clear-ProgressLine
+# blanks it so the next message starts on a clean line, as it would have without it.
+function Format-ProgressLine {
+    param(
+        [int]$Percent,
+        [string]$Detail,
+        [int]$Width,
+        [int]$Indent = 0
+    )
+    $Tail = ' {0,3}%  {1}' -f $Percent, $Detail
+    # One column is kept free, because writing into the last column makes some consoles wrap, and a wrapped
+    # line is one that \r cannot get back to.
+    $BarWidth = [math]::Min(40, $Width - 1 - $Indent - $Tail.Length - 2)
+    if ($BarWidth -lt 10) {
+        $Indent = 0
+        $BarWidth = [math]::Max(0, $Width - 1 - $Tail.Length - 2)
+    }
+    $Filled = [int][math]::Floor($BarWidth * $Percent / 100)
+    $Line = (' ' * $Indent) + '[' + ('#' * $Filled) + ('-' * ($BarWidth - $Filled)) + ']' + $Tail
+    # A detail too long for a narrow console is cut rather than allowed to wrap.
+    if ($Line.Length -gt $Width - 1) { $Line = $Line.Substring(0, [math]::Max(0, $Width - 1)) }
+    return $Line
+}
+
+# How far a transfer has got, such as "1.23 of 6.84 GB, 45 MB/s".
+function Format-ByteProgress {
+    param(
+        [long]$Done,
+        [long]$Total,
+        [TimeSpan]$Elapsed
+    )
+    $Speed = if ($Elapsed.TotalSeconds -ge 1) { ', {0:N0} MB/s' -f ($Done / 1MB / $Elapsed.TotalSeconds) } else { '' }
+    if ($Total -ge 1GB) { return ('{0:N2} of {1:N2} GB{2}' -f ($Done / 1GB), ($Total / 1GB), $Speed) }
+    return ('{0:N0} of {1:N0} MB{2}' -f ($Done / 1MB), ($Total / 1MB), $Speed)
+}
+
+function New-ProgressLine {
+    param([int]$Indent = 0)
+    return @{ Width = (Get-ConsoleWidth); Indent = $Indent; Start = (Get-Date); Percent = -1; Detail = $null; Drawn = $false }
+}
+
+# Redraws only when the percentage or the detail has changed. Without a -Detail, the time taken so far is shown.
+function Update-ProgressLine {
+    param(
+        [Parameter(Mandatory)][hashtable]$State,
+        [int]$Percent,
+        [string]$Detail
+    )
+    $Percent = [math]::Max(0, [math]::Min(100, $Percent))
+    if ($Percent -eq $State.Percent -and $Detail -eq $State.Detail) { return }
+    $State.Percent = $Percent
+    $State.Detail = $Detail
+    if ($State.Width -le 0) { return }
+    if (-not $Detail) { $Detail = Format-Duration ((Get-Date) - $State.Start) }
+    try {
+        [Console]::Write("`r" + (Format-ProgressLine -Percent $Percent -Detail $Detail -Width $State.Width -Indent $State.Indent))
+        $State.Drawn = $true
+    }
+    catch { $State.Width = 0 }   # a host without a real console, so stop trying
+}
+
+function Clear-ProgressLine {
+    param([Parameter(Mandatory)][hashtable]$State)
+    if (-not $State.Drawn) { return }
+    try { [Console]::Write("`r" + (' ' * ($State.Width - 1)) + "`r") } catch { }
+    $State.Drawn = $false
+}
+
 function Write-HostTimestamp {
     param (
         [string]$Message,
@@ -964,6 +1035,13 @@ function Get-InstalledWindowsInfo {
 #endregion
 
 #region Downloads
+# The percentage on one of robocopy's progress lines, such as "  12.5%", or $null for any other line.
+function Get-RobocopyPercent {
+    param([string]$Line)
+    if ($Line -notmatch '^\s*(\d{1,3})(?:[.,]\d+)?%\s*$') { return $null }
+    return [math]::Min(100, [int]$Matches[1])
+}
+
 # Moves one multi-GB file with robocopy, which retries a share that blips and whose /J unbuffered mode is
 # measurably faster than Copy-Item over SMB. /COPY:DAT is the important part: it takes data, attributes and
 # timestamps only, deliberately leaving out S (the ACL), O (the owner) and U (auditing), so a file landing
@@ -988,9 +1066,23 @@ function Copy-LargeFile {
             if ($Value -match '^[A-Za-z]:$') { $Value += '\' }
             Set-Variable -Name $Name -Value $Value
         }
+        # No /NP or /NFL, because robocopy only reports its percentage with both left off. The percentage lines
+        # drive the progress line and are dropped, so the output kept for an error message stays short.
         $RoboArgs = @($SourceDir, $TargetDir, (Split-Path -Leaf $Path),
-            '/COPY:DAT', '/J', '/R:2', '/W:5', '/NP', '/NJH', '/NJS', '/NFL', '/NDL')
-        $RoboOutput = & robocopy.exe @RoboArgs 2>&1
+            '/COPY:DAT', '/J', '/R:2', '/W:5', '/NJH', '/NJS', '/NDL')
+        $Progress = New-ProgressLine -Indent 24
+        try {
+            $RoboOutput = & robocopy.exe @RoboArgs 2>&1 | ForEach-Object {
+                $Line = "$_"
+                $Percent = Get-RobocopyPercent -Line $Line
+                if ($null -eq $Percent) { $Line }
+                elseif ($Percent -ne $Progress.Percent) {
+                    $Detail = Format-ByteProgress -Done ([long]($SourceLength * $Percent / 100)) -Total $SourceLength -Elapsed ((Get-Date) - $Started)
+                    Update-ProgressLine -State $Progress -Percent $Percent -Detail $Detail
+                }
+            }
+        }
+        finally { Clear-ProgressLine -State $Progress }
         # robocopy counts anything under 8 as success (0 is "already identical", 1 is "copied").
         if ($LASTEXITCODE -ge 8) {
             $Detail = (@($RoboOutput) | ForEach-Object { "$_".Trim() } | Where-Object { $_ }) -join ' '
@@ -1028,15 +1120,47 @@ function Get-FileDownload {
     # Prefer BITS: it is resumable and far more reliable for multi-GB downloads.
     # Under a scheduled task running as another user, BITS jobs fail to enqueue and this falls through to Invoke-WebRequest below.
     if (Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue) {
+        $Job = $null
+        $Progress = $null
         try {
             Write-HostTimestamp '  Downloading with BITS...'
-            Start-BitsTransfer -Source $Url -Destination $Partial -Description 'Windows download' -ErrorAction Stop
+            # Started in the background and polled, so the bytes transferred can be shown as it goes.
+            $Job = Start-BitsTransfer -Source $Url -Destination $Partial -Description 'Windows download' -Asynchronous -ErrorAction Stop
+            $Progress = New-ProgressLine -Indent 24
+            $LastBytes = [long]-1
+            $Idle = [System.Diagnostics.Stopwatch]::StartNew()
+            while ($Job.JobState -in 'Queued', 'Connecting', 'Transferring', 'TransientError') {
+                $Done = [long]$Job.BytesTransferred
+                $Total = $Job.BytesTotal
+                # The total reads as the largest 64-bit number until the server has said how big the file is.
+                if ($Total -gt 0 -and $Total -lt [uint64]::MaxValue) {
+                    $Detail = Format-ByteProgress -Done $Done -Total ([long]$Total) -Elapsed ((Get-Date) - $Progress.Start)
+                    Update-ProgressLine -State $Progress -Percent ([int][math]::Floor(100 * $Done / $Total)) -Detail $Detail
+                }
+                # BITS keeps retrying a dead connection for days, so give up on one that has gone quiet and
+                # let the direct download below have a go.
+                if ($Done -ne $LastBytes) { $LastBytes = $Done; $Idle.Restart() }
+                elseif ($Idle.Elapsed.TotalMinutes -ge 5) { throw "no data arrived for 5 minutes (BITS state: $($Job.JobState))" }
+                Start-Sleep -Milliseconds 500
+            }
+            Clear-ProgressLine -State $Progress
+            if ($Job.JobState -ne 'Transferred') { throw "the job stopped in state $($Job.JobState): $("$($Job.ErrorDescription)".Trim())" }
+            Complete-BitsTransfer -BitsJob $Job -ErrorAction Stop
+            $Job = $null
             Move-Item -LiteralPath $Partial -Destination $Destination -Force -ErrorAction Stop
             return $true
         }
         catch {
+            if ($Progress) { Clear-ProgressLine -State $Progress }
+            if ($Job) { Remove-BitsTransfer -BitsJob $Job -ErrorAction SilentlyContinue; $Job = $null }
             Write-HostTimestamp "  BITS transfer failed ($($_.Exception.Message)). Falling back to a direct download..." -ForegroundColor Yellow
             Remove-Item -LiteralPath $Partial -Force -ErrorAction SilentlyContinue
+        }
+        finally {
+            # Reached with a job still set only when the run is stopped mid-download (Ctrl+C), which would
+            # otherwise leave BITS fetching a file nobody will collect.
+            if ($Progress) { Clear-ProgressLine -State $Progress }
+            if ($Job) { Remove-BitsTransfer -BitsJob $Job -ErrorAction SilentlyContinue }
         }
     }
 
@@ -1985,6 +2109,7 @@ function Get-Sha256 {
     $BufferSize = 4MB
     $Algorithm = $null
     $Stream = $null
+    $Progress = $null
     try {
         $Length = (Get-Item -LiteralPath $Path -ErrorAction Stop).Length
         # On .NET Framework the base factory hands back the managed implementation, so ask for the
@@ -2003,13 +2128,21 @@ function Get-Sha256 {
         $Done = [long]0
         $NextPercent = 20
         $Timer = [System.Diagnostics.Stopwatch]::StartNew()
+        # Reported only for the multi-gigabyte ISOs, where a slow source can make this take minutes. On a
+        # console that is a progress line. Without one (a scheduled run), a line every 20% goes to the
+        # transcript instead, so its log still shows the hash moving.
+        if ($ShowProgress -and $Length -gt 1GB) { $Progress = New-ProgressLine -Indent 24 }
         while (($Count = $Stream.Read($Buffer, 0, $Buffer.Length)) -gt 0) {
             [void]$Algorithm.TransformBlock($Buffer, 0, $Count, $null, 0)
             $Done += $Count
-            # Reported only for the multi-gigabyte ISOs, where a slow source can make this take minutes.
-            if ($ShowProgress -and $Length -gt 1GB) {
-                $Percent = [int](100 * $Done / $Length)
-                if ($Percent -ge $NextPercent -and $Timer.Elapsed.TotalSeconds -gt 0) {
+            if ($Progress) {
+                $Percent = [int][math]::Floor(100 * $Done / $Length)
+                if ($Progress.Width -gt 0) {
+                    if ($Percent -ne $Progress.Percent) {
+                        Update-ProgressLine -State $Progress -Percent $Percent -Detail (Format-ByteProgress -Done $Done -Total $Length -Elapsed $Timer.Elapsed)
+                    }
+                }
+                elseif ($Percent -ge $NextPercent -and $Timer.Elapsed.TotalSeconds -gt 0) {
                     Write-HostTimestamp ('    {0}% ({1:N0} MB/s)' -f $Percent, ($Done / 1MB / $Timer.Elapsed.TotalSeconds)) -ForegroundColor DarkGray
                     $NextPercent = $Percent + 20
                 }
@@ -2020,6 +2153,7 @@ function Get-Sha256 {
     }
     catch { return $null }
     finally {
+        if ($Progress) { Clear-ProgressLine -State $Progress }
         if ($Stream) { $Stream.Dispose() }
         if ($Algorithm) { $Algorithm.Dispose() }
     }
@@ -3561,66 +3695,65 @@ function Get-DismPercent {
     return [math]::Min(100, [int]$Matches[1])
 }
 
-# The line shown while DISM works, such as "      [############--------]  47%  2m 13s", sized to fit the
-# console so it is never wrapped onto a second line that \r could not get back to.
-function Format-DismProgress {
-    param(
-        [int]$Percent,
-        [TimeSpan]$Elapsed,
-        [int]$Width,
-        [int]$Indent = 0
-    )
-    $Tail = ' {0,3}%  {1}' -f $Percent, (Format-Duration $Elapsed)
-    # One column is kept free, because writing into the last column makes some consoles wrap.
-    $BarWidth = [math]::Min(40, $Width - 1 - $Indent - $Tail.Length - 2)
-    if ($BarWidth -lt 10) {
-        $Indent = 0
-        $BarWidth = [math]::Max(0, $Width - 1 - $Tail.Length - 2)
-    }
-    $Filled = [int][math]::Floor($BarWidth * $Percent / 100)
-    return (' ' * $Indent) + '[' + ('#' * $Filled) + ('-' * ($BarWidth - $Filled)) + ']' + $Tail
-}
-
 # Runs dism.exe and returns everything it printed, leaving $LASTEXITCODE as DISM set it. DISM redraws its
 # progress bar with carriage returns, and PowerShell hands each redraw over as a line of its own, so the
-# percentage can be read off as it goes and shown on a single line that is overwritten in place, then
-# cleared when DISM finishes. That line is written straight to the console rather than through Write-Host,
-# so it never reaches the transcript or the CMTrace log, and it is skipped when output is redirected.
+# percentage is read off as it goes and shown on a progress line (see New-ProgressLine).
+#
+# With -FailureMessage it stands in for a DISM cmdlet called with -ErrorAction Stop: any exit code other than
+# success or "restart needed" throws, with that message followed by DISM's error code and its own words.
 function Invoke-Dism {
     param(
         [Parameter(Mandatory)][string[]]$ArgumentList,
-        [int]$Indent = 28
+        [int]$Indent = 28,
+        [string]$FailureMessage
     )
 
-    $Width = Get-ConsoleWidth
-    $Start = Get-Date
-    $Shown = -1
-    $Drawn = $false
+    $Progress = New-ProgressLine -Indent $Indent
     try {
-        & dism.exe @ArgumentList 2>&1 | ForEach-Object {
+        $Output = & dism.exe @ArgumentList 2>&1 | ForEach-Object {
             $Line = "$_"
-            if ($Width -gt 0) {
-                $Percent = Get-DismPercent -Line $Line
-                # DISM redraws the bar many times per percent, so the console is only touched when the number moves.
-                if ($null -ne $Percent -and $Percent -ne $Shown) {
-                    $Shown = $Percent
-                    try {
-                        [Console]::Write("`r" + (Format-DismProgress -Percent $Percent -Elapsed ((Get-Date) - $Start) -Width $Width -Indent $Indent))
-                        $Drawn = $true
-                    }
-                    catch { $Width = 0 }   # a host without a real console, so stop trying
-                }
-            }
+            $Percent = Get-DismPercent -Line $Line
+            if ($null -ne $Percent) { Update-ProgressLine -State $Progress -Percent $Percent }
             $Line
         }
     }
-    finally {
-        # Blank the progress line, so the next message starts on a clean line, as it would have without it.
-        if ($Drawn) {
-            try { [Console]::Write("`r" + (' ' * ($Width - 1)) + "`r") } catch { }
-        }
+    finally { Clear-ProgressLine -State $Progress }
+
+    $ExitCode = $LASTEXITCODE
+    if ($FailureMessage -and $ExitCode -ne 0 -and $ExitCode -ne 3010) {
+        $Code = Get-DismErrorCode -Output $Output -ExitCode $ExitCode
+        $Said = (@(Get-DismMessage -Output $Output) | Where-Object { $_ -notmatch '^Error:\s*0x' }) -join ' '
+        throw "$FailureMessage (DISM error $Code)$(if ($Said) { ": $Said" })"
     }
+    return $Output
 }
+
+# Export-WindowsImage, run through dism.exe so its progress can be shown. Throws if DISM fails.
+function Export-WimImage {
+    param(
+        [Parameter(Mandatory)][string]$SourceImagePath,
+        [Parameter(Mandatory)][int]$SourceIndex,
+        [Parameter(Mandatory)][string]$DestinationImagePath,
+        [ValidateSet('None', 'Fast', 'Max', 'Recovery')][string]$CompressionType = 'Max',
+        [switch]$Setbootable,
+        [int]$Indent = 24
+    )
+    $Arguments = @('/Export-Image', "/SourceImageFile:$SourceImagePath", "/SourceIndex:$SourceIndex",
+        "/DestinationImageFile:$DestinationImagePath", "/Compress:$($CompressionType.ToLowerInvariant())")
+    if ($Setbootable) { $Arguments += '/Bootable' }
+    Invoke-Dism -ArgumentList $Arguments -Indent $Indent -FailureMessage "Could not export index $SourceIndex of $(Split-Path -Leaf $SourceImagePath)" | Out-Null
+}
+
+# Dismount-WindowsImage -Save, run through dism.exe so the commit's progress can be shown. Throws if DISM
+# fails, leaving the image mounted for the caller's own discard-and-recover handling, as the cmdlet did.
+function Save-MountedImage {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [int]$Indent = 26
+    )
+    Invoke-Dism -ArgumentList '/Unmount-Image', "/MountDir:$Path", '/Commit' -Indent $Indent -FailureMessage "Could not commit and unmount the image at $Path" | Out-Null
+}
+
 # Pulls the servicing stack update out of a combined SSU+LCU .msu and applies it on its own. Windows rejects
 # a cumulative update with 0x800F0823 when the image's stack is older than the update needs, and DISM does
 # not always take the stack out of the combined package by itself when servicing offline.
@@ -4067,7 +4200,7 @@ function Optimize-WinReImage {
         Write-HostTimestamp '      Re-exporting the recovery image to shrink it...'
         # Always Max, never -FastCompression: this image has to fit a fixed recovery partition, and at a few
         # hundred MB the compression time is irrelevant next to install.wim.
-        Export-WindowsImage -SourceImagePath $WinReWim -SourceIndex 1 -DestinationImagePath $Temp -CompressionType Max -ErrorAction Stop | Out-Null
+        Export-WimImage -SourceImagePath $WinReWim -SourceIndex 1 -DestinationImagePath $Temp -CompressionType Max -Indent 28
         Set-ItemProperty -LiteralPath $WinReWim -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
         # Copied rather than moved, because the destination lives inside a DISM projection of install.wim.
         Copy-Item -LiteralPath $Temp -Destination $WinReWim -Force -ErrorAction Stop
@@ -4556,7 +4689,7 @@ function New-RecoveryIso {
     }
 
     Write-HostTimestamp '  Placing the recovery image where the media boots from (sources\boot.wim)...'
-    Export-WindowsImage -SourceImagePath $WinReWim -SourceIndex 1 -DestinationImagePath (Join-Path $RecoveryRoot 'sources\boot.wim') -CompressionType Max -Setbootable -ErrorAction Stop | Out-Null
+    Export-WimImage -SourceImagePath $WinReWim -SourceIndex 1 -DestinationImagePath (Join-Path $RecoveryRoot 'sources\boot.wim') -CompressionType Max -Setbootable
 
     $Re = Get-WinReVersion -WinReWim $WinReWim
     $WindowsTag =
@@ -5459,7 +5592,7 @@ if ($RecoveryIsoOnly) {
             if ($SourceImage -like '*.esd') {
                 $MountSource = Join-Path -Path $RecoveryMediaDir -ChildPath 'install.wim'
                 Write-HostTimestamp '  The media uses install.esd, so one edition is converted to a WIM first...'
-                Export-WindowsImage -SourceImagePath $SourceImage -SourceIndex 1 -DestinationImagePath $MountSource -CompressionType Fast -ErrorAction Stop | Out-Null
+                Export-WimImage -SourceImagePath $SourceImage -SourceIndex 1 -DestinationImagePath $MountSource -CompressionType Fast
             }
             $script:RecoveryFeatureName = if ($RecoverySkipUpdate) { $null } else { Resolve-FeatureUpdateName -Build $ImageBuild -WimPath $MountSource }
             $Staged = Join-Path -Path $RecoveryMediaDir -ChildPath 'winre.wim'
@@ -5528,7 +5661,7 @@ if ($RecoveryIsoOnly) {
                             $From = Join-Path -Path $WinReMount -ChildPath "Windows\Boot\EFI\$Name"
                             if (Test-Path -LiteralPath $From) { Copy-Item -LiteralPath $From -Destination $RecoveryBootManagers -Force -ErrorAction Stop }
                         }
-                        Dismount-WindowsImage -Path $WinReMount -Save -ErrorAction Stop | Out-Null
+                        Save-MountedImage -Path $WinReMount -Indent 28
                         $Re = Get-WinReVersion -WinReWim $script:RecoveryWinRe
                         if ($Re) { Write-HostTimestamp "  The recovery image is now at $($Re.Version)." -ForegroundColor Green }
                     }
@@ -5777,7 +5910,7 @@ if (-not (Test-Path -LiteralPath $InstallWimExtracted) -and (Test-Path -LiteralP
             $Img = $Images | Where-Object { [int]$_.ImageIndex -eq [int]$Want } | Select-Object -First 1
             if (-not $Img) { continue }
             Write-HostTimestamp "  Exporting index $($Img.ImageIndex): $($Img.ImageName) ..."
-            Export-WindowsImage -SourceImagePath $InstallEsdExtracted -SourceIndex $Img.ImageIndex -DestinationImagePath $InstallWimExtracted -CompressionType $WimCompression -ErrorAction Stop | Out-Null
+            Export-WimImage -SourceImagePath $InstallEsdExtracted -SourceIndex $Img.ImageIndex -DestinationImagePath $InstallWimExtracted -CompressionType $WimCompression
         }
         Remove-Item -LiteralPath $InstallEsdExtracted -Force -ErrorAction SilentlyContinue
         Write-HostTimestamp '  Conversion complete.' -ForegroundColor Green
@@ -6187,7 +6320,7 @@ if ($UpdateGroups.Count -gt 0 -or $script:DriverInfFiles.Count -gt 0) {
                                 Write-HostTimestamp '      Cleaning up the recovery image component store (/StartComponentCleanup /ResetBase)...'
                                 Invoke-Dism -ArgumentList "/Image:$WinReMount", '/Cleanup-Image', '/StartComponentCleanup', '/ResetBase' | Out-Null
                                 Remove-ImageResidue -MountDir $WinReMount
-                                Dismount-WindowsImage -Path $WinReMount -Save -ErrorAction Stop | Out-Null
+                                Save-MountedImage -Path $WinReMount -Indent 28
                                 Optimize-WinReImage -WinReWim $WinReWim -ImageLabel $WinReLabel
                                 # Read before the edition is committed, since this file only exists while it is mounted.
                                 Add-WimSizeSample -Label $WinReSizeLabel -Path $WinReWim
@@ -6238,7 +6371,7 @@ if ($UpdateGroups.Count -gt 0 -or $script:DriverInfFiles.Count -gt 0) {
                 if (-not $script:FinalImageLocale) { $script:FinalImageLocale = Get-MountedImageLocale -MountPath $MountDir }
 
                 Write-HostTimestamp '    Committing and unmounting...'
-                Dismount-WindowsImage -Path $MountDir -Save -ErrorAction Stop | Out-Null
+                Save-MountedImage -Path $MountDir -Indent 26
                 Write-HostTimestamp "    Index $Index done." -ForegroundColor Green
             }
             catch {
@@ -6317,7 +6450,7 @@ if ($UpdateGroups.Count -gt 0 -or $script:DriverInfFiles.Count -gt 0) {
                         }
                     }
 
-                    Dismount-WindowsImage -Path $MountDir -Save -ErrorAction Stop | Out-Null
+                    Save-MountedImage -Path $MountDir -Indent 26
                     Write-HostTimestamp "    boot.wim index $($BootImg.ImageIndex) done." -ForegroundColor Green
                 }
                 catch {
@@ -6340,7 +6473,7 @@ if ($UpdateGroups.Count -gt 0 -or $script:DriverInfFiles.Count -gt 0) {
                         # Index 2 (Windows Setup) carries the WIM's bootable flag, and without -Setbootable the ISO will not boot.
                         $Boot = ([int]$Img.ImageIndex -eq 2)
                         Write-HostTimestamp "  Exporting index $($Img.ImageIndex) ($($Img.ImageName))$(if ($Boot) { ' [bootable]' }) ..."
-                        Export-WindowsImage -SourceImagePath $BootWim -SourceIndex $Img.ImageIndex -DestinationImagePath $TempBoot -CompressionType $WimCompression -Setbootable:$Boot -ErrorAction Stop | Out-Null
+                        Export-WimImage -SourceImagePath $BootWim -SourceIndex $Img.ImageIndex -DestinationImagePath $TempBoot -CompressionType $WimCompression -Setbootable:$Boot
                     }
                     Set-ItemProperty -LiteralPath $BootWim -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
                     Remove-Item -LiteralPath $BootWim -Force -ErrorAction Stop
@@ -6473,7 +6606,7 @@ if (($UpdateGroups.Count -gt 0) -or $TrimNeeded -or $CompressEsd) {
             foreach ($Index in $KeepIndexes) {
                 $Name = ($InstallImages | Where-Object { $_.ImageIndex -eq $Index }).ImageName
                 Write-HostTimestamp "  Exporting [$Index] $Name ..."
-                Export-WindowsImage -SourceImagePath $InstallWimExtracted -DestinationImagePath $Temp -CompressionType $Compression -SourceIndex $Index -ErrorAction Stop | Out-Null
+                Export-WimImage -SourceImagePath $InstallWimExtracted -DestinationImagePath $Temp -CompressionType $Compression -SourceIndex $Index
             }
             Remove-Item -LiteralPath $InstallWimExtracted -Force -ErrorAction Stop
             Move-Item -LiteralPath $Temp -Destination $Dest -Force -ErrorAction Stop

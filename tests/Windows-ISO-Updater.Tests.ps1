@@ -6,7 +6,7 @@ BeforeAll {
     $Names = @(
         'ConvertFrom-HotpatchCalendar', 'Read-ConfigFile', 'Format-ShortHash', 'Get-BuildParameterHash', 'Get-DefaultIsoName', 'Get-EditionRank', 'Get-EditionShortName',
         'Get-DismErrorCode', 'Get-DismErrorMeaning', 'Get-DismLogError', 'Get-DismMessage', 'Save-DismLog',
-        'Format-DismProgress', 'Format-Duration', 'Format-WrappedText', 'Get-DismPercent', 'Get-FileDownload', 'Get-HotpatchBaselineKb', 'Get-PatchTuesdayStart', 'Get-ScheduledTaskArgumentString', 'Get-ScriptCommandLine', 'Get-TextSha256',
+        'Format-ByteProgress', 'Format-Duration', 'Format-ProgressLine', 'Format-WrappedText', 'Get-DismPercent', 'Get-FileDownload', 'Get-RobocopyPercent', 'Get-HotpatchBaselineKb', 'Get-PatchTuesdayStart', 'Get-ScheduledTaskArgumentString', 'Get-ScriptCommandLine', 'Get-TextSha256',
         'Resolve-EditionIndexes', 'Search-UpdateCatalog', 'Select-DefaultEditions', 'Select-HotpatchBaselineEntry', 'Test-FidoUrl', 'Test-IsHotpatchBaseline',
         'Test-MicrosoftDownloadUrl', 'Test-RebuildNeeded', 'Test-SameWriteTime', 'Test-UpdatePackageFile'
     )
@@ -375,24 +375,57 @@ Describe 'Get-DismPercent' {
     }
 }
 
-Describe 'Format-DismProgress' {
+Describe 'Get-RobocopyPercent' {
+    It 'reads <Expected> from <Line>' -TestCases @(
+        @{ Line = '  0.1%'; Expected = 0 }
+        @{ Line = ' 47.5%'; Expected = 47 }
+        @{ Line = ' 12,5%'; Expected = 12 }
+        @{ Line = '100%'; Expected = 100 }
+    ) {
+        Get-RobocopyPercent -Line $Line | Should -Be $Expected
+    }
+
+    It 'ignores <Line>' -TestCases @(
+        @{ Line = "`t    New File  `t`t 800.0 m`tC:\src\big.bin" }
+        @{ Line = '[====   10.0%   ]' }
+        @{ Line = '' }
+    ) {
+        Get-RobocopyPercent -Line $Line | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Format-ProgressLine' {
     It 'fills the bar in proportion to the percentage' {
-        $Line = Format-DismProgress -Percent 50 -Elapsed ([TimeSpan]::FromSeconds(133)) -Width 120 -Indent 4
+        $Line = Format-ProgressLine -Percent 50 -Detail '2m 13s' -Width 120 -Indent 4
         $Line | Should -Be ('    [' + ('#' * 20) + ('-' * 20) + ']  50%  2m 13s')
     }
 
     It 'never reaches the last column, whatever the width' {
-        foreach ($Width in 30, 40, 60, 80, 200) {
+        foreach ($Width in 20, 30, 40, 60, 80, 200) {
             foreach ($Percent in 0, 37, 100) {
-                $Line = Format-DismProgress -Percent $Percent -Elapsed ([TimeSpan]::FromMinutes(75)) -Width $Width -Indent 28
+                $Line = Format-ProgressLine -Percent $Percent -Detail '6.84 of 6.84 GB, 112 MB/s' -Width $Width -Indent 28
                 $Line.Length | Should -BeLessThan $Width
             }
         }
     }
 
     It 'drops the indent on a narrow console rather than squeezing the bar to nothing' {
-        $Line = Format-DismProgress -Percent 10 -Elapsed ([TimeSpan]::FromSeconds(5)) -Width 40 -Indent 28
+        $Line = Format-ProgressLine -Percent 10 -Detail '5.0s' -Width 40 -Indent 28
         $Line | Should -Match '^\[[#-]{10,}\]'
+    }
+}
+
+Describe 'Format-ByteProgress' {
+    It 'shows gigabytes for a large transfer' {
+        Format-ByteProgress -Done 1.5GB -Total 6GB -Elapsed ([TimeSpan]::FromSeconds(30)) | Should -Be '1.50 of 6.00 GB, 51 MB/s'
+    }
+
+    It 'shows megabytes for a small transfer' {
+        Format-ByteProgress -Done 100MB -Total 400MB -Elapsed ([TimeSpan]::FromSeconds(10)) | Should -Be '100 of 400 MB, 10 MB/s'
+    }
+
+    It 'leaves the speed out until a second has passed' {
+        Format-ByteProgress -Done 1MB -Total 400MB -Elapsed ([TimeSpan]::FromMilliseconds(200)) | Should -Be '1 of 400 MB'
     }
 }
 

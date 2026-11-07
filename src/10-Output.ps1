@@ -107,6 +107,77 @@ function Format-WrappedText {
     return $Lines.ToArray()
 }
 
+# A progress line: one console line, such as "      [############--------]  47%  2m 13s", that is redrawn
+# in place while a long operation runs and cleared when it ends. It is written straight to the console rather
+# than through Write-Host, so it never reaches the transcript or the CMTrace log, and nothing is drawn when
+# output is redirected. New-ProgressLine starts one, Update-ProgressLine redraws it, Clear-ProgressLine
+# blanks it so the next message starts on a clean line, as it would have without it.
+function Format-ProgressLine {
+    param(
+        [int]$Percent,
+        [string]$Detail,
+        [int]$Width,
+        [int]$Indent = 0
+    )
+    $Tail = ' {0,3}%  {1}' -f $Percent, $Detail
+    # One column is kept free, because writing into the last column makes some consoles wrap, and a wrapped
+    # line is one that \r cannot get back to.
+    $BarWidth = [math]::Min(40, $Width - 1 - $Indent - $Tail.Length - 2)
+    if ($BarWidth -lt 10) {
+        $Indent = 0
+        $BarWidth = [math]::Max(0, $Width - 1 - $Tail.Length - 2)
+    }
+    $Filled = [int][math]::Floor($BarWidth * $Percent / 100)
+    $Line = (' ' * $Indent) + '[' + ('#' * $Filled) + ('-' * ($BarWidth - $Filled)) + ']' + $Tail
+    # A detail too long for a narrow console is cut rather than allowed to wrap.
+    if ($Line.Length -gt $Width - 1) { $Line = $Line.Substring(0, [math]::Max(0, $Width - 1)) }
+    return $Line
+}
+
+# How far a transfer has got, such as "1.23 of 6.84 GB, 45 MB/s".
+function Format-ByteProgress {
+    param(
+        [long]$Done,
+        [long]$Total,
+        [TimeSpan]$Elapsed
+    )
+    $Speed = if ($Elapsed.TotalSeconds -ge 1) { ', {0:N0} MB/s' -f ($Done / 1MB / $Elapsed.TotalSeconds) } else { '' }
+    if ($Total -ge 1GB) { return ('{0:N2} of {1:N2} GB{2}' -f ($Done / 1GB), ($Total / 1GB), $Speed) }
+    return ('{0:N0} of {1:N0} MB{2}' -f ($Done / 1MB), ($Total / 1MB), $Speed)
+}
+
+function New-ProgressLine {
+    param([int]$Indent = 0)
+    return @{ Width = (Get-ConsoleWidth); Indent = $Indent; Start = (Get-Date); Percent = -1; Detail = $null; Drawn = $false }
+}
+
+# Redraws only when the percentage or the detail has changed. Without a -Detail, the time taken so far is shown.
+function Update-ProgressLine {
+    param(
+        [Parameter(Mandatory)][hashtable]$State,
+        [int]$Percent,
+        [string]$Detail
+    )
+    $Percent = [math]::Max(0, [math]::Min(100, $Percent))
+    if ($Percent -eq $State.Percent -and $Detail -eq $State.Detail) { return }
+    $State.Percent = $Percent
+    $State.Detail = $Detail
+    if ($State.Width -le 0) { return }
+    if (-not $Detail) { $Detail = Format-Duration ((Get-Date) - $State.Start) }
+    try {
+        [Console]::Write("`r" + (Format-ProgressLine -Percent $Percent -Detail $Detail -Width $State.Width -Indent $State.Indent))
+        $State.Drawn = $true
+    }
+    catch { $State.Width = 0 }   # a host without a real console, so stop trying
+}
+
+function Clear-ProgressLine {
+    param([Parameter(Mandatory)][hashtable]$State)
+    if (-not $State.Drawn) { return }
+    try { [Console]::Write("`r" + (' ' * ($State.Width - 1)) + "`r") } catch { }
+    $State.Drawn = $false
+}
+
 function Write-HostTimestamp {
     param (
         [string]$Message,

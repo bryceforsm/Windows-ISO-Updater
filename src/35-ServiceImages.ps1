@@ -147,7 +147,7 @@ if ($UpdateGroups.Count -gt 0 -or $script:DriverInfFiles.Count -gt 0) {
                                 Write-HostTimestamp '      Cleaning up the recovery image component store (/StartComponentCleanup /ResetBase)...'
                                 Invoke-Dism -ArgumentList "/Image:$WinReMount", '/Cleanup-Image', '/StartComponentCleanup', '/ResetBase' | Out-Null
                                 Remove-ImageResidue -MountDir $WinReMount
-                                Dismount-WindowsImage -Path $WinReMount -Save -ErrorAction Stop | Out-Null
+                                Save-MountedImage -Path $WinReMount -Indent 28
                                 Optimize-WinReImage -WinReWim $WinReWim -ImageLabel $WinReLabel
                                 # Read before the edition is committed, since this file only exists while it is mounted.
                                 Add-WimSizeSample -Label $WinReSizeLabel -Path $WinReWim
@@ -198,7 +198,7 @@ if ($UpdateGroups.Count -gt 0 -or $script:DriverInfFiles.Count -gt 0) {
                 if (-not $script:FinalImageLocale) { $script:FinalImageLocale = Get-MountedImageLocale -MountPath $MountDir }
 
                 Write-HostTimestamp '    Committing and unmounting...'
-                Dismount-WindowsImage -Path $MountDir -Save -ErrorAction Stop | Out-Null
+                Save-MountedImage -Path $MountDir -Indent 26
                 Write-HostTimestamp "    Index $Index done." -ForegroundColor Green
             }
             catch {
@@ -277,7 +277,7 @@ if ($UpdateGroups.Count -gt 0 -or $script:DriverInfFiles.Count -gt 0) {
                         }
                     }
 
-                    Dismount-WindowsImage -Path $MountDir -Save -ErrorAction Stop | Out-Null
+                    Save-MountedImage -Path $MountDir -Indent 26
                     Write-HostTimestamp "    boot.wim index $($BootImg.ImageIndex) done." -ForegroundColor Green
                 }
                 catch {
@@ -300,7 +300,7 @@ if ($UpdateGroups.Count -gt 0 -or $script:DriverInfFiles.Count -gt 0) {
                         # Index 2 (Windows Setup) carries the WIM's bootable flag, and without -Setbootable the ISO will not boot.
                         $Boot = ([int]$Img.ImageIndex -eq 2)
                         Write-HostTimestamp "  Exporting index $($Img.ImageIndex) ($($Img.ImageName))$(if ($Boot) { ' [bootable]' }) ..."
-                        Export-WindowsImage -SourceImagePath $BootWim -SourceIndex $Img.ImageIndex -DestinationImagePath $TempBoot -CompressionType $WimCompression -Setbootable:$Boot -ErrorAction Stop | Out-Null
+                        Export-WimImage -SourceImagePath $BootWim -SourceIndex $Img.ImageIndex -DestinationImagePath $TempBoot -CompressionType $WimCompression -Setbootable:$Boot
                     }
                     Set-ItemProperty -LiteralPath $BootWim -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
                     Remove-Item -LiteralPath $BootWim -Force -ErrorAction Stop

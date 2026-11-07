@@ -22,7 +22,7 @@ if (($UpdateGroups.Count -gt 0) -or $TrimNeeded -or $CompressEsd) {
             foreach ($Index in $KeepIndexes) {
                 $Name = ($InstallImages | Where-Object { $_.ImageIndex -eq $Index }).ImageName
                 Write-HostTimestamp "  Exporting [$Index] $Name ..."
-                Export-WindowsImage -SourceImagePath $InstallWimExtracted -DestinationImagePath $Temp -CompressionType $Compression -SourceIndex $Index -ErrorAction Stop | Out-Null
+                Export-WimImage -SourceImagePath $InstallWimExtracted -DestinationImagePath $Temp -CompressionType $Compression -SourceIndex $Index
             }
             Remove-Item -LiteralPath $InstallWimExtracted -Force -ErrorAction Stop
             Move-Item -LiteralPath $Temp -Destination $Dest -Force -ErrorAction Stop

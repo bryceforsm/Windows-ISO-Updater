@@ -77,7 +77,7 @@ if ($RecoveryIsoOnly) {
             if ($SourceImage -like '*.esd') {
                 $MountSource = Join-Path -Path $RecoveryMediaDir -ChildPath 'install.wim'
                 Write-HostTimestamp '  The media uses install.esd, so one edition is converted to a WIM first...'
-                Export-WindowsImage -SourceImagePath $SourceImage -SourceIndex 1 -DestinationImagePath $MountSource -CompressionType Fast -ErrorAction Stop | Out-Null
+                Export-WimImage -SourceImagePath $SourceImage -SourceIndex 1 -DestinationImagePath $MountSource -CompressionType Fast
             }
             $script:RecoveryFeatureName = if ($RecoverySkipUpdate) { $null } else { Resolve-FeatureUpdateName -Build $ImageBuild -WimPath $MountSource }
             $Staged = Join-Path -Path $RecoveryMediaDir -ChildPath 'winre.wim'
@@ -146,7 +146,7 @@ if ($RecoveryIsoOnly) {
                             $From = Join-Path -Path $WinReMount -ChildPath "Windows\Boot\EFI\$Name"
                             if (Test-Path -LiteralPath $From) { Copy-Item -LiteralPath $From -Destination $RecoveryBootManagers -Force -ErrorAction Stop }
                         }
-                        Dismount-WindowsImage -Path $WinReMount -Save -ErrorAction Stop | Out-Null
+                        Save-MountedImage -Path $WinReMount -Indent 28
                         $Re = Get-WinReVersion -WinReWim $script:RecoveryWinRe
                         if ($Re) { Write-HostTimestamp "  The recovery image is now at $($Re.Version)." -ForegroundColor Green }
                     }

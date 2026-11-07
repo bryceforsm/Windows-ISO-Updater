@@ -109,7 +109,7 @@ if (-not (Test-Path -LiteralPath $InstallWimExtracted) -and (Test-Path -LiteralP
             $Img = $Images | Where-Object { [int]$_.ImageIndex -eq [int]$Want } | Select-Object -First 1
             if (-not $Img) { continue }
             Write-HostTimestamp "  Exporting index $($Img.ImageIndex): $($Img.ImageName) ..."
-            Export-WindowsImage -SourceImagePath $InstallEsdExtracted -SourceIndex $Img.ImageIndex -DestinationImagePath $InstallWimExtracted -CompressionType $WimCompression -ErrorAction Stop | Out-Null
+            Export-WimImage -SourceImagePath $InstallEsdExtracted -SourceIndex $Img.ImageIndex -DestinationImagePath $InstallWimExtracted -CompressionType $WimCompression
         }
         Remove-Item -LiteralPath $InstallEsdExtracted -Force -ErrorAction SilentlyContinue
         Write-HostTimestamp '  Conversion complete.' -ForegroundColor Green

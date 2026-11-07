@@ -43,6 +43,12 @@ change how the log renders. Never pick a color for looks.
 
 Sub-items are indented two spaces inside the string itself. Durations go through `Format-Duration`.
 
+For a wait longer than a few seconds, show a progress line: `New-ProgressLine`, then `Update-ProgressLine`
+as the work moves, then `Clear-ProgressLine` in a `finally`. It redraws one console line in place, stays out
+of the transcript and the CMTrace log, and does nothing when output is redirected. Never use `Write-Progress`,
+which `$ProgressPreference` hides for the whole run. Run `dism.exe` through `Invoke-Dism` so its progress
+shows, and pass `-FailureMessage` where the call must throw on failure.
+
 **Steps.** Wrap any meaningful unit of work in `Invoke-Task`. It prints the description, times the block
 in a `finally`, and appends to `$script:StepTimings` for the summary table at the end.
 

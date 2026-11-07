@@ -7,66 +7,65 @@ function Get-DismPercent {
     return [math]::Min(100, [int]$Matches[1])
 }
 
-# The line shown while DISM works, such as "      [############--------]  47%  2m 13s", sized to fit the
-# console so it is never wrapped onto a second line that \r could not get back to.
-function Format-DismProgress {
-    param(
-        [int]$Percent,
-        [TimeSpan]$Elapsed,
-        [int]$Width,
-        [int]$Indent = 0
-    )
-    $Tail = ' {0,3}%  {1}' -f $Percent, (Format-Duration $Elapsed)
-    # One column is kept free, because writing into the last column makes some consoles wrap.
-    $BarWidth = [math]::Min(40, $Width - 1 - $Indent - $Tail.Length - 2)
-    if ($BarWidth -lt 10) {
-        $Indent = 0
-        $BarWidth = [math]::Max(0, $Width - 1 - $Tail.Length - 2)
-    }
-    $Filled = [int][math]::Floor($BarWidth * $Percent / 100)
-    return (' ' * $Indent) + '[' + ('#' * $Filled) + ('-' * ($BarWidth - $Filled)) + ']' + $Tail
-}
-
 # Runs dism.exe and returns everything it printed, leaving $LASTEXITCODE as DISM set it. DISM redraws its
 # progress bar with carriage returns, and PowerShell hands each redraw over as a line of its own, so the
-# percentage can be read off as it goes and shown on a single line that is overwritten in place, then
-# cleared when DISM finishes. That line is written straight to the console rather than through Write-Host,
-# so it never reaches the transcript or the CMTrace log, and it is skipped when output is redirected.
+# percentage is read off as it goes and shown on a progress line (see New-ProgressLine).
+#
+# With -FailureMessage it stands in for a DISM cmdlet called with -ErrorAction Stop: any exit code other than
+# success or "restart needed" throws, with that message followed by DISM's error code and its own words.
 function Invoke-Dism {
     param(
         [Parameter(Mandatory)][string[]]$ArgumentList,
-        [int]$Indent = 28
+        [int]$Indent = 28,
+        [string]$FailureMessage
     )
 
-    $Width = Get-ConsoleWidth
-    $Start = Get-Date
-    $Shown = -1
-    $Drawn = $false
+    $Progress = New-ProgressLine -Indent $Indent
     try {
-        & dism.exe @ArgumentList 2>&1 | ForEach-Object {
+        $Output = & dism.exe @ArgumentList 2>&1 | ForEach-Object {
             $Line = "$_"
-            if ($Width -gt 0) {
-                $Percent = Get-DismPercent -Line $Line
-                # DISM redraws the bar many times per percent, so the console is only touched when the number moves.
-                if ($null -ne $Percent -and $Percent -ne $Shown) {
-                    $Shown = $Percent
-                    try {
-                        [Console]::Write("`r" + (Format-DismProgress -Percent $Percent -Elapsed ((Get-Date) - $Start) -Width $Width -Indent $Indent))
-                        $Drawn = $true
-                    }
-                    catch { $Width = 0 }   # a host without a real console, so stop trying
-                }
-            }
+            $Percent = Get-DismPercent -Line $Line
+            if ($null -ne $Percent) { Update-ProgressLine -State $Progress -Percent $Percent }
             $Line
         }
     }
-    finally {
-        # Blank the progress line, so the next message starts on a clean line, as it would have without it.
-        if ($Drawn) {
-            try { [Console]::Write("`r" + (' ' * ($Width - 1)) + "`r") } catch { }
-        }
+    finally { Clear-ProgressLine -State $Progress }
+
+    $ExitCode = $LASTEXITCODE
+    if ($FailureMessage -and $ExitCode -ne 0 -and $ExitCode -ne 3010) {
+        $Code = Get-DismErrorCode -Output $Output -ExitCode $ExitCode
+        $Said = (@(Get-DismMessage -Output $Output) | Where-Object { $_ -notmatch '^Error:\s*0x' }) -join ' '
+        throw "$FailureMessage (DISM error $Code)$(if ($Said) { ": $Said" })"
     }
+    return $Output
 }
+
+# Export-WindowsImage, run through dism.exe so its progress can be shown. Throws if DISM fails.
+function Export-WimImage {
+    param(
+        [Parameter(Mandatory)][string]$SourceImagePath,
+        [Parameter(Mandatory)][int]$SourceIndex,
+        [Parameter(Mandatory)][string]$DestinationImagePath,
+        [ValidateSet('None', 'Fast', 'Max', 'Recovery')][string]$CompressionType = 'Max',
+        [switch]$Setbootable,
+        [int]$Indent = 24
+    )
+    $Arguments = @('/Export-Image', "/SourceImageFile:$SourceImagePath", "/SourceIndex:$SourceIndex",
+        "/DestinationImageFile:$DestinationImagePath", "/Compress:$($CompressionType.ToLowerInvariant())")
+    if ($Setbootable) { $Arguments += '/Bootable' }
+    Invoke-Dism -ArgumentList $Arguments -Indent $Indent -FailureMessage "Could not export index $SourceIndex of $(Split-Path -Leaf $SourceImagePath)" | Out-Null
+}
+
+# Dismount-WindowsImage -Save, run through dism.exe so the commit's progress can be shown. Throws if DISM
+# fails, leaving the image mounted for the caller's own discard-and-recover handling, as the cmdlet did.
+function Save-MountedImage {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [int]$Indent = 26
+    )
+    Invoke-Dism -ArgumentList '/Unmount-Image', "/MountDir:$Path", '/Commit' -Indent $Indent -FailureMessage "Could not commit and unmount the image at $Path" | Out-Null
+}
+
 # Pulls the servicing stack update out of a combined SSU+LCU .msu and applies it on its own. Windows rejects
 # a cumulative update with 0x800F0823 when the image's stack is older than the update needs, and DISM does
 # not always take the stack out of the combined package by itself when servicing offline.
@@ -513,7 +512,7 @@ function Optimize-WinReImage {
         Write-HostTimestamp '      Re-exporting the recovery image to shrink it...'
         # Always Max, never -FastCompression: this image has to fit a fixed recovery partition, and at a few
         # hundred MB the compression time is irrelevant next to install.wim.
-        Export-WindowsImage -SourceImagePath $WinReWim -SourceIndex 1 -DestinationImagePath $Temp -CompressionType Max -ErrorAction Stop | Out-Null
+        Export-WimImage -SourceImagePath $WinReWim -SourceIndex 1 -DestinationImagePath $Temp -CompressionType Max -Indent 28
         Set-ItemProperty -LiteralPath $WinReWim -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
         # Copied rather than moved, because the destination lives inside a DISM projection of install.wim.
         Copy-Item -LiteralPath $Temp -Destination $WinReWim -Force -ErrorAction Stop
