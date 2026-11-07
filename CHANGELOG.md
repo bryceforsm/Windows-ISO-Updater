@@ -6,7 +6,8 @@ What changed in each release. Versions are dates, `yyyy.MM.dd.<revision>`. Relea
 
 ### Changed
 
-- The long steps now show a progress bar with a percentage, instead of sitting silent for several minutes: applying updates, cleaning up the component store, exporting and committing images, downloading the ISO and update packages, copying an ISO to or from a network share, and hashing the ISO. Downloads and copies also show how much has transferred and how fast. The bar updates in place, is cleared when the step finishes, and is not written to the transcript or the log.
+- The long steps now show a progress bar with a percentage, instead of sitting silent for several minutes: applying updates, cleaning up the component store, exporting images, downloading the ISO and update packages, copying an ISO to or from a network share, and hashing the ISO. Downloads and copies also show how much has transferred and how fast. The bar updates in place, is cleared when the step finishes, and is not written to the transcript or the log.
+- Committing and unmounting an image shows how much has been written to the image so far and for how long, such as `Writing the image: 1.24 GB so far (2m 10s)`. DISM reports no percentage for a commit, so there is no bar for that step.
 - Images are now exported and committed with `dism.exe` instead of the DISM PowerShell cmdlets, which is what makes their progress visible. A failure now reports DISM's error code and message.
 - A scheduled task registered with `-TaskUsername` now downloads directly instead of trying BITS first, because BITS only transfers files for a signed-in user. A task running as SYSTEM still uses BITS.
 - A BITS download that receives nothing for five minutes, or does not start within two, now gives up and falls back to a direct download. Before, BITS could keep retrying a dead connection indefinitely.

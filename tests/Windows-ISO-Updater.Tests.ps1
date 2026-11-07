@@ -427,6 +427,16 @@ Describe 'Format-ProgressLine' {
         }
     }
 
+    It 'shows the detail alone when there is no percentage' {
+        Format-ProgressLine -Percent -1 -Detail 'Writing the image: 1.24 GB so far (2m 10s)' -Width 120 -Indent 4 |
+            Should -Be '    Writing the image: 1.24 GB so far (2m 10s)'
+    }
+
+    It 'keeps a detail-only line out of the last column' {
+        $Line = Format-ProgressLine -Percent -1 -Detail ('x' * 60) -Width 50 -Indent 26
+        $Line.Length | Should -BeLessThan 50
+    }
+
     It 'drops the indent on a narrow console rather than squeezing the bar to nothing' {
         $Line = Format-ProgressLine -Percent 10 -Detail '5.0s' -Width 40 -Indent 28
         $Line | Should -Match '^\[[#-]{10,}\]'

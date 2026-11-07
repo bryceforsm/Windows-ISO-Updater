@@ -1,6 +1,6 @@
 # GENERATED FILE. Edit the files in src\ and run tools\Build-Script.ps1, because changes made here are overwritten.
 # Windows ISO Updater
-# Version: 2026.11.06.3   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
+# Version: 2026.11.06.4   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
 #
 #region Script overview
 # This script builds a fully up-to-date ("slipstreamed") Windows 11, Windows 10 or Windows Server
@@ -311,7 +311,7 @@ $script:ScriptPath = $PSCommandPath
 
 # Kept in step with the header comment by tools\Update-Version.ps1, and shown in the log and recorded in
 # the build stamp so a finished ISO can be traced back to the exact script that built it.
-$ScriptVersion = '2026.11.06.3'
+$ScriptVersion = '2026.11.06.4'
 
 # A scheduled run has nobody to answer a prompt.
 if ($Scheduled) {
@@ -776,7 +776,8 @@ function Format-WrappedText {
 # in place while a long operation runs and cleared when it ends. It is written straight to the console rather
 # than through Write-Host, so it never reaches the transcript or the CMTrace log, and nothing is drawn when
 # output is redirected. New-ProgressLine starts one, Update-ProgressLine redraws it, Clear-ProgressLine
-# blanks it so the next message starts on a clean line, as it would have without it.
+# blanks it so the next message starts on a clean line, as it would have without it. A -Percent below 0 means
+# the work has no percentage to show, and the line is the detail alone.
 function Format-ProgressLine {
     param(
         [int]$Percent,
@@ -784,6 +785,12 @@ function Format-ProgressLine {
         [int]$Width,
         [int]$Indent = 0
     )
+    if ($Percent -lt 0) {
+        if ($Indent + $Detail.Length -gt $Width - 1) { $Indent = 0 }
+        $Line = (' ' * $Indent) + $Detail
+        if ($Line.Length -gt $Width - 1) { $Line = $Line.Substring(0, [math]::Max(0, $Width - 1)) }
+        return $Line
+    }
     $Tail = ' {0,3}%  {1}' -f $Percent, $Detail
     # One column is kept free, because writing into the last column makes some consoles wrap, and a wrapped
     # line is one that \r cannot get back to.
@@ -813,7 +820,7 @@ function Format-ByteProgress {
 
 function New-ProgressLine {
     param([int]$Indent = 0)
-    return @{ Width = (Get-ConsoleWidth); Indent = $Indent; Start = (Get-Date); Percent = -1; Detail = $null; Drawn = $false }
+    return @{ Width = (Get-ConsoleWidth); Indent = $Indent; Start = (Get-Date); Percent = -2; Detail = $null; Drawn = $false; Length = 0 }
 }
 
 # Redraws only when the percentage or the detail has changed. Without a -Detail, the time taken so far is shown.
@@ -823,14 +830,17 @@ function Update-ProgressLine {
         [int]$Percent,
         [string]$Detail
     )
-    $Percent = [math]::Max(0, [math]::Min(100, $Percent))
+    if ($Percent -lt 0) { $Percent = -1 } else { $Percent = [math]::Min(100, $Percent) }
     if ($Percent -eq $State.Percent -and $Detail -eq $State.Detail) { return }
     $State.Percent = $Percent
     $State.Detail = $Detail
     if ($State.Width -le 0) { return }
     if (-not $Detail) { $Detail = Format-Duration ((Get-Date) - $State.Start) }
     try {
-        [Console]::Write("`r" + (Format-ProgressLine -Percent $Percent -Detail $Detail -Width $State.Width -Indent $State.Indent))
+        $Line = Format-ProgressLine -Percent $Percent -Detail $Detail -Width $State.Width -Indent $State.Indent
+        # Padded out to the last line drawn, so a shorter redraw does not leave the end of the old one behind.
+        [Console]::Write("`r" + $Line.PadRight([int]$State.Length))
+        $State.Length = $Line.Length
         $State.Drawn = $true
     }
     catch { $State.Width = 0 }   # a host without a real console, so stop trying
@@ -3739,13 +3749,69 @@ function Invoke-Dism {
     }
     finally { Clear-ProgressLine -State $Progress }
 
-    $ExitCode = $LASTEXITCODE
-    if ($FailureMessage -and $ExitCode -ne 0 -and $ExitCode -ne 3010) {
-        $Code = Get-DismErrorCode -Output $Output -ExitCode $ExitCode
-        $Said = (@(Get-DismMessage -Output $Output) | Where-Object { $_ -notmatch '^Error:\s*0x' }) -join ' '
-        throw "$FailureMessage (DISM error $Code)$(if ($Said) { ": $Said" })"
-    }
+    if ($FailureMessage) { Assert-DismSuccess -Output $Output -ExitCode $LASTEXITCODE -FailureMessage $FailureMessage }
     return $Output
+}
+
+# Throws unless DISM ended in success or "restart needed", with the message followed by DISM's error code
+# and its own account of what went wrong.
+function Assert-DismSuccess {
+    param(
+        [object[]]$Output,
+        [int]$ExitCode,
+        [Parameter(Mandatory)][string]$FailureMessage
+    )
+    if ($ExitCode -eq 0 -or $ExitCode -eq 3010) { return }
+    $Code = Get-DismErrorCode -Output $Output -ExitCode $ExitCode
+    $Said = (@(Get-DismMessage -Output $Output) | Where-Object { $_ -notmatch '^Error:\s*0x' }) -join ' '
+    throw "$FailureMessage (DISM error $Code)$(if ($Said) { ": $Said" })"
+}
+
+# Runs a program in the background and, while it works, shows how much a file has grown and for how long.
+# For work that reports no progress of its own but writes into a known file as it goes. There is no
+# percentage, because how much will be written is not known in advance. -Waiting is shown until the file
+# starts to grow, and -Writing (followed by the amount) once it does. Returns the exit code and everything
+# the program printed. A file that cannot be read just leaves the line showing the time taken.
+function Invoke-WatchedProcess {
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [Parameter(Mandatory)][string]$Arguments,
+        [string]$WatchFile,
+        [string]$Waiting = 'Working',
+        [string]$Writing = 'Writing',
+        [int]$Indent = 0
+    )
+
+    $StartSize = $null
+    if ($WatchFile -and (Test-Path -LiteralPath $WatchFile -PathType Leaf)) { $StartSize = (Get-Item -LiteralPath $WatchFile).Length }
+    $OutFile = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath ('wiso_' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.out')
+    $ErrFile = "$OutFile.err"
+    $Progress = New-ProgressLine -Indent $Indent
+    try {
+        $Proc = Start-Process -FilePath $FilePath -ArgumentList $Arguments -NoNewWindow -PassThru -RedirectStandardOutput $OutFile -RedirectStandardError $ErrFile -ErrorAction Stop
+        # Read once now, because without the handle the exit code can come back empty once the process is gone.
+        $null = $Proc.Handle
+        while (-not $Proc.WaitForExit(1000)) {
+            $Elapsed = Format-Duration ((Get-Date) - $Progress.Start)
+            $Written = 0
+            if ($null -ne $StartSize) {
+                try { $Written = [long](Get-Item -LiteralPath $WatchFile -ErrorAction Stop).Length - $StartSize } catch { }
+            }
+            $Detail = if ($Written -ge 1GB) { '{0}: {1:N2} GB so far ({2})' -f $Writing, ($Written / 1GB), $Elapsed }
+                      elseif ($Written -ge 1MB) { '{0}: {1:N0} MB so far ({2})' -f $Writing, ($Written / 1MB), $Elapsed }
+                      else { '{0} ({1})' -f $Waiting, $Elapsed }
+            Update-ProgressLine -State $Progress -Percent -1 -Detail $Detail
+        }
+        $Proc.WaitForExit()
+        return [pscustomobject]@{
+            ExitCode = $Proc.ExitCode
+            Output   = @(Get-Content -LiteralPath $OutFile, $ErrFile -ErrorAction SilentlyContinue)
+        }
+    }
+    finally {
+        Clear-ProgressLine -State $Progress
+        Remove-Item -LiteralPath $OutFile, $ErrFile -Force -ErrorAction SilentlyContinue
+    }
 }
 
 # Export-WindowsImage, run through dism.exe so its progress can be shown. Throws if DISM fails.
@@ -3764,14 +3830,25 @@ function Export-WimImage {
     Invoke-Dism -ArgumentList $Arguments -Indent $Indent -FailureMessage "Could not export index $SourceIndex of $(Split-Path -Leaf $SourceImagePath)" | Out-Null
 }
 
-# Dismount-WindowsImage -Save, run through dism.exe so the commit's progress can be shown. Throws if DISM
-# fails, leaving the image mounted for the caller's own discard-and-recover handling, as the cmdlet did.
+# Dismount-WindowsImage -Save, through dism.exe. Throws if DISM fails, leaving the image mounted for the
+# caller's own discard-and-recover handling, as the cmdlet did.
+#
+# DISM prints no progress while it commits, so the image file it is committing to is watched instead: a
+# commit writes the changed files back into the .wim, which grows as it goes. The line shows how much has
+# been written and for how long, and "Preparing" while DISM is still scanning the mounted image.
 function Save-MountedImage {
     param(
         [Parameter(Mandatory)][string]$Path,
         [int]$Indent = 26
     )
-    Invoke-Dism -ArgumentList '/Unmount-Image', "/MountDir:$Path", '/Commit' -Indent $Indent -FailureMessage "Could not commit and unmount the image at $Path" | Out-Null
+    $ImagePath = $null
+    try {
+        $Mounted = Get-WindowsImage -Mounted -ErrorAction Stop | Where-Object { "$($_.Path)".TrimEnd('\') -eq $Path.TrimEnd('\') } | Select-Object -First 1
+        if ($Mounted) { $ImagePath = $Mounted.ImagePath }
+    }
+    catch { }   # without it the line still shows the time taken
+    $Result = Invoke-WatchedProcess -FilePath 'dism.exe' -Arguments "/Unmount-Image /MountDir:`"$($Path.TrimEnd('\'))`" /Commit" -WatchFile $ImagePath -Waiting 'Preparing the commit' -Writing 'Writing the image' -Indent $Indent
+    Assert-DismSuccess -Output $Result.Output -ExitCode $Result.ExitCode -FailureMessage "Could not commit and unmount the image at $Path"
 }
 
 # Pulls the servicing stack update out of a combined SSU+LCU .msu and applies it on its own. Windows rejects

@@ -111,7 +111,8 @@ function Format-WrappedText {
 # in place while a long operation runs and cleared when it ends. It is written straight to the console rather
 # than through Write-Host, so it never reaches the transcript or the CMTrace log, and nothing is drawn when
 # output is redirected. New-ProgressLine starts one, Update-ProgressLine redraws it, Clear-ProgressLine
-# blanks it so the next message starts on a clean line, as it would have without it.
+# blanks it so the next message starts on a clean line, as it would have without it. A -Percent below 0 means
+# the work has no percentage to show, and the line is the detail alone.
 function Format-ProgressLine {
     param(
         [int]$Percent,
@@ -119,6 +120,12 @@ function Format-ProgressLine {
         [int]$Width,
         [int]$Indent = 0
     )
+    if ($Percent -lt 0) {
+        if ($Indent + $Detail.Length -gt $Width - 1) { $Indent = 0 }
+        $Line = (' ' * $Indent) + $Detail
+        if ($Line.Length -gt $Width - 1) { $Line = $Line.Substring(0, [math]::Max(0, $Width - 1)) }
+        return $Line
+    }
     $Tail = ' {0,3}%  {1}' -f $Percent, $Detail
     # One column is kept free, because writing into the last column makes some consoles wrap, and a wrapped
     # line is one that \r cannot get back to.
@@ -148,7 +155,7 @@ function Format-ByteProgress {
 
 function New-ProgressLine {
     param([int]$Indent = 0)
-    return @{ Width = (Get-ConsoleWidth); Indent = $Indent; Start = (Get-Date); Percent = -1; Detail = $null; Drawn = $false }
+    return @{ Width = (Get-ConsoleWidth); Indent = $Indent; Start = (Get-Date); Percent = -2; Detail = $null; Drawn = $false; Length = 0 }
 }
 
 # Redraws only when the percentage or the detail has changed. Without a -Detail, the time taken so far is shown.
@@ -158,14 +165,17 @@ function Update-ProgressLine {
         [int]$Percent,
         [string]$Detail
     )
-    $Percent = [math]::Max(0, [math]::Min(100, $Percent))
+    if ($Percent -lt 0) { $Percent = -1 } else { $Percent = [math]::Min(100, $Percent) }
     if ($Percent -eq $State.Percent -and $Detail -eq $State.Detail) { return }
     $State.Percent = $Percent
     $State.Detail = $Detail
     if ($State.Width -le 0) { return }
     if (-not $Detail) { $Detail = Format-Duration ((Get-Date) - $State.Start) }
     try {
-        [Console]::Write("`r" + (Format-ProgressLine -Percent $Percent -Detail $Detail -Width $State.Width -Indent $State.Indent))
+        $Line = Format-ProgressLine -Percent $Percent -Detail $Detail -Width $State.Width -Indent $State.Indent
+        # Padded out to the last line drawn, so a shorter redraw does not leave the end of the old one behind.
+        [Console]::Write("`r" + $Line.PadRight([int]$State.Length))
+        $State.Length = $Line.Length
         $State.Drawn = $true
     }
     catch { $State.Width = 0 }   # a host without a real console, so stop trying
