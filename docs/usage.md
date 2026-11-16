@@ -137,6 +137,15 @@ A few differences worth knowing:
   Update"* ([how they are told apart](design-notes.md#how-the-dynamic-updates-are-told-apart)). Microsoft does
   not publish a Setup Dynamic Update for every Server release, so on media without one the script reports
   that none was found and refreshes the media Setup files from `boot.wim` alone.
+- **Each Server release stops at its last update before Extended Security Updates.** After a release
+  leaves support, its cumulative updates are ESU updates, which are expected to refuse an offline image the
+  way Windows 10's do ([Windows 10 Media Stops at the October 2025 Update](#windows-10-media-stops-at-the-october-2025-update)).
+  So Server media is updated only as far as the month its support ends, and the log says so when the search
+  runs. The later updates install once Windows is running, and only on a server enrolled in ESU. The last
+  update in the ISO is January 2027 for Server 2016, January 2029 for Server 2019, October 2031 for Server
+  2022 and November 2034 for Server 2025. Server 2016 is the first to reach its cap. Until a real build has
+  tried each release's first ESU update, its cap is a prediction, not a confirmed limit
+  ([why the caps are in place ahead of time](design-notes.md#why-windows-server-media-stops-before-extended-security-updates)).
 - `-Server` is **deprecated and no longer needed**. The image is the source of truth, so a Server ISO passed with `-IsoPath` or dropped into the download folder is recognised on its own, and a yellow line names what was found whenever it differs from what the run expected. The switch is still accepted so existing scheduled tasks and wrapper scripts keep running. Before any ISO is in hand the only thing that can tell Server from client is the last build stamp in the same working folder, which is what stops a scheduled Server run whose ISO went missing from downloading client media instead.
 - **Give Server its own working folder if you also build client ISOs.** See
   [Building Several Windows Versions Side by Side](#building-several-windows-versions-side-by-side).

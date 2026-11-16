@@ -4,6 +4,10 @@ What changed in each release. Versions are dates, `yyyy.MM.dd.<revision>`. Relea
 
 ## [Unreleased]
 
+### Changed
+
+- Windows Server media is now updated only as far as the last cumulative update before its Extended Security Updates begin: January 2027 for Server 2016 (and Windows 10 LTSB 2016), January 2029 for Server 2019 (and Windows 10 LTSC 2019), October 2031 for Server 2022 and November 2034 for Server 2025. ESU updates are expected to refuse an offline image the way Windows 10's have since November 2025, and without a cap each build would fail on the update and ship that edition with no update at all. Nothing changes until a release's first ESU update is published, starting with Server 2016 in February 2027, and a cap will be removed if that update turns out to install offline. The later updates install once Windows is running, on a server enrolled in ESU. See [Windows Server Specific Notes](docs/usage.md#windows-server-specific-notes).
+
 ## [2026.11.07.5](https://github.com/bryceforsm/Windows-ISO-Updater/releases/tag/2026.11.07.5) - 2026-11-07
 
 ### Added
