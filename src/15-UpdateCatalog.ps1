@@ -238,19 +238,72 @@ function Select-HotpatchBaselineEntry {
 #   an ESU step, but Windows 10 22H2 did add one to LTSC 2021's shared update while LTSC 2021 was still supported.
 #   If a 26100 update starts refusing offline images before 2034, that is the reason.
 # - 25398, Windows Server 23H2, is an Annual Channel release with no ESU, so it has no row.
-function Get-OfflineLcuCutoff {
+#
+# Returns the row (Release, Cutoff, Confirmed) for this build, or $null when it has no cap.
+function Get-OfflineLcuCap {
     param([int]$Build)
-    $Cutoffs = @(
-        @{ First = 19041; Last = 19045; Cutoff = [datetime]::new(2025, 10, 31) }
-        @{ First = 14393; Last = 14393; Cutoff = [datetime]::new(2027, 1, 31) }
-        @{ First = 17763; Last = 17763; Cutoff = [datetime]::new(2029, 1, 31) }
-        @{ First = 20348; Last = 20348; Cutoff = [datetime]::new(2031, 10, 31) }
-        @{ First = 26100; Last = 26100; Cutoff = [datetime]::new(2034, 11, 30) }
+    $Caps = @(
+        @{ First = 19041; Last = 19045; Release = 'Windows 10 2004-22H2'; Cutoff = [datetime]::new(2025, 10, 31); Confirmed = $true }
+        @{ First = 14393; Last = 14393; Release = 'Windows Server 2016';  Cutoff = [datetime]::new(2027, 1, 31);  Confirmed = $false }
+        @{ First = 17763; Last = 17763; Release = 'Windows Server 2019';  Cutoff = [datetime]::new(2029, 1, 31);  Confirmed = $false }
+        @{ First = 20348; Last = 20348; Release = 'Windows Server 2022';  Cutoff = [datetime]::new(2031, 10, 31); Confirmed = $false }
+        @{ First = 26100; Last = 26100; Release = 'Windows Server 2025';  Cutoff = [datetime]::new(2034, 11, 30); Confirmed = $false }
     )
-    foreach ($Row in $Cutoffs) {
-        if ($Build -ge $Row.First -and $Build -le $Row.Last) { return $Row.Cutoff }
+    foreach ($Row in $Caps) {
+        if ($Build -ge $Row.First -and $Build -le $Row.Last) { return $Row }
     }
     return $null
+}
+
+function Get-OfflineLcuCutoff {
+    param([int]$Build)
+    $Cap = Get-OfflineLcuCap -Build $Build
+    if ($Cap) { return $Cap.Cutoff }
+    return $null
+}
+
+# What a run says and records about the cap, or $null while it changes nothing. Before the cutoff has passed no
+# update newer than it exists, so a cap is only worth mentioning once it can actually hold one back. A cap that
+# has not been confirmed says so, so nobody reading the log or the ISO's record mistakes a prediction for a fact.
+function Get-OfflineLcuCapNote {
+    param(
+        [int]$Build,
+        [datetime]$Now = (Get-Date)
+    )
+    $Cap = Get-OfflineLcuCap -Build $Build
+    if (-not $Cap -or $Now -le $Cap.Cutoff) { return $null }
+    $Month = $Cap.Cutoff.ToString('MMMM yyyy', [System.Globalization.CultureInfo]::InvariantCulture)
+    $Message =
+        if ($Cap.Confirmed) {
+            "Build $Build ($($Cap.Release)) is capped at the $Month cumulative update. Later ones carry an Extended Security Updates step that refuses to run on an offline image, so Windows installs them after setup."
+        }
+        else {
+            "Build $Build ($($Cap.Release)) is capped at the $Month cumulative update. Later ones are Extended Security Updates, which are expected to refuse an offline image, but this has not been confirmed yet. Windows installs them after setup on a machine enrolled in ESU. To try a newer one offline, supply it with -UpdatePath."
+        }
+    return [pscustomobject]@{
+        Message = $Message
+        Record  = [ordered]@{
+            Release   = $Cap.Release
+            NotAfter  = $Cap.Cutoff.ToString('yyyy-MM', [System.Globalization.CultureInfo]::InvariantCulture)
+            Status    = if ($Cap.Confirmed) { 'Confirmed' } else { 'Expected' }
+            Reason    = if ($Cap.Confirmed) { 'Later cumulative updates refuse an offline image (Extended Security Updates)' } else { 'Later cumulative updates are expected to refuse an offline image (Extended Security Updates), not yet confirmed' }
+        }
+    }
+}
+
+# Logs the cap note once per run, however many steps look the cap up, and keeps the record for the ISO and the
+# build stamp.
+function Write-OfflineLcuCapNote {
+    param(
+        [int]$Build,
+        [datetime]$Now = (Get-Date)
+    )
+    $Note = Get-OfflineLcuCapNote -Build $Build -Now $Now
+    if (-not $Note) { return }
+    $script:OfflineLcuCapRecord = $Note.Record
+    if ($script:OfflineLcuCapNoted -eq $Build) { return }
+    $script:OfflineLcuCapNoted = $Build
+    Write-HostTimestamp "  $($Note.Message)" -ForegroundColor DarkGray
 }
 
 # A catalog search returns only its 25 newest matches, so one bounded by an older date can come back with

@@ -5,7 +5,7 @@ BeforeAll {
     $Ast = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path -LiteralPath $ScriptFile).Path, [ref]$null, [ref]$null)
     $Names = @(
         'ConvertFrom-HotpatchCalendar', 'Read-ConfigFile', 'Format-ShortHash', 'Get-BuildParameterHash', 'Get-DefaultIsoName', 'Get-EditionRank', 'Get-EditionShortName', 'Get-FeatureUpdateName',
-        'Get-DismErrorCode', 'Get-DismErrorMeaning', 'Get-DismLogError', 'Get-DismMessage', 'Save-DismLog', 'Format-ExitCode', 'Test-DismImageUnserviceable', 'Test-DismEsuOfflineRefusal', 'Get-OfflineLcuCutoff', 'Get-LcuTitleExclude', 'Search-UpdateCatalogUpTo', 'Get-CatalogLatestEntry', 'Get-DynamicUpdateKind', 'Select-DynamicUpdateEntry', 'Get-DynamicUpdateSearch', 'Get-CabFileList', 'Expand-ServicingStack', 'Test-StandaloneServicingStack',
+        'Get-DismErrorCode', 'Get-DismErrorMeaning', 'Get-DismLogError', 'Get-DismMessage', 'Save-DismLog', 'Format-ExitCode', 'Test-DismImageUnserviceable', 'Test-DismEsuOfflineRefusal', 'Get-OfflineLcuCap', 'Get-OfflineLcuCutoff', 'Get-OfflineLcuCapNote', 'Write-OfflineLcuCapNote', 'Get-LcuTitleExclude', 'Search-UpdateCatalogUpTo', 'Get-CatalogLatestEntry', 'Get-DynamicUpdateKind', 'Select-DynamicUpdateEntry', 'Get-DynamicUpdateSearch', 'Get-CabFileList', 'Expand-ServicingStack', 'Test-StandaloneServicingStack',
         'Format-ByteProgress', 'Format-DismProgressDetail', 'Format-Duration', 'Format-ProgressLine', 'Format-WrappedText', 'Get-DismPercent', 'Get-FileDownload', 'Get-RobocopyPercent', 'Test-BitsUsable', 'Test-PathInList', 'Get-WinHttpProxy', 'Test-VirtualMachineModel', 'Format-Gigabytes', 'Format-Uptime', 'Get-HotpatchBaselineKb', 'Get-PatchTuesdayStart', 'Get-ScheduledTaskArgumentString', 'Get-ScriptCommandLine', 'Get-TextSha256',
         'Resolve-EditionIndexes', 'Search-UpdateCatalog', 'Select-DefaultEditions', 'Select-HotpatchBaselineEntry', 'Test-FidoUrl', 'Test-IsHotpatchBaseline',
         'Test-MicrosoftDownloadUrl', 'Test-RebuildNeeded', 'Test-SameWriteTime', 'Test-UpdatePackageFile'
@@ -212,6 +212,57 @@ Describe 'The offline cumulative update cap' {
         @{ Build = 0 }, @{ Build = 10240 }, @{ Build = 14392 }, @{ Build = 14394 }, @{ Build = 18363 }, @{ Build = 19040 }, @{ Build = 19046 }, @{ Build = 22631 }, @{ Build = 25398 }, @{ Build = 26200 }
     ) {
         Get-OfflineLcuCutoff -Build $Build | Should -BeNullOrEmpty
+    }
+
+    It 'marks only the Windows 10 cap as confirmed' {
+        (Get-OfflineLcuCap -Build 19045).Confirmed | Should -BeTrue
+        foreach ($Build in 14393, 17763, 20348, 26100) { (Get-OfflineLcuCap -Build $Build).Confirmed | Should -BeFalse }
+    }
+
+    It 'says nothing about a cap before its cutoff has passed' {
+        Get-OfflineLcuCapNote -Build 14393 -Now ([datetime]'2026-11-15') | Should -BeNullOrEmpty
+        Get-OfflineLcuCapNote -Build 14393 -Now ([datetime]'2027-01-31') | Should -BeNullOrEmpty
+    }
+
+    It 'says nothing for a build with no cap' {
+        Get-OfflineLcuCapNote -Build 26200 -Now ([datetime]'2040-01-01') | Should -BeNullOrEmpty
+    }
+
+    It 'reports a confirmed cap as a fact' {
+        $Note = Get-OfflineLcuCapNote -Build 19045 -Now ([datetime]'2026-11-15')
+        $Note.Message | Should -Match 'capped at the October 2025 cumulative update'
+        $Note.Message | Should -Not -Match 'not been confirmed'
+        $Note.Record.Status | Should -Be 'Confirmed'
+        $Note.Record.NotAfter | Should -Be '2025-10'
+    }
+
+    It 'reports an unconfirmed cap as a prediction once its cutoff has passed' {
+        $Note = Get-OfflineLcuCapNote -Build 14393 -Now ([datetime]'2027-02-10')
+        $Note.Message | Should -Match 'Windows Server 2016'
+        $Note.Message | Should -Match 'capped at the January 2027 cumulative update'
+        $Note.Message | Should -Match 'not been confirmed'
+        $Note.Message | Should -Match '-UpdatePath'
+        $Note.Record.Status | Should -Be 'Expected'
+        $Note.Record.NotAfter | Should -Be '2027-01'
+    }
+
+    It 'logs the cap once per run however many steps look it up, and keeps the record' {
+        Mock Write-HostTimestamp {}
+        $script:OfflineLcuCapRecord = $null
+        $script:OfflineLcuCapNoted = $null
+        Write-OfflineLcuCapNote -Build 19045
+        Write-OfflineLcuCapNote -Build 19045
+        Should -Invoke Write-HostTimestamp -Times 1 -Exactly
+        $script:OfflineLcuCapRecord.Status | Should -Be 'Confirmed'
+    }
+
+    It 'neither logs nor records a cap that changes nothing yet' {
+        Mock Write-HostTimestamp {}
+        $script:OfflineLcuCapRecord = $null
+        $script:OfflineLcuCapNoted = $null
+        Write-OfflineLcuCapNote -Build 14393 -Now ([datetime]'2026-11-15')
+        Should -Invoke Write-HostTimestamp -Times 0 -Exactly
+        $script:OfflineLcuCapRecord | Should -BeNullOrEmpty
     }
 
     It 'passes over the November 2025 update for capped media' {

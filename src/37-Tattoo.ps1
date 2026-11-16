@@ -183,6 +183,8 @@ if (-not $SkipTattoo) {
             }
             Updates     = [ordered]@{
                 CatalogSelection = $CatalogSelection
+                # Why the cumulative update is older than the catalog's newest, when an offline cap chose it.
+                OfflineCap       = $script:OfflineLcuCapRecord
                 Packages         = $Packages
                 Servicing        = $script:TattooServicing.ToArray()
                 FailedCount      = $Failed.Count

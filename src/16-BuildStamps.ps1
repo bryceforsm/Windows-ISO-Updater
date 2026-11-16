@@ -436,7 +436,10 @@ function Get-ExpectedUpdateSet {
     # Same queries (including the broader fallback) and offline cap the download step uses, so the two always agree.
     $Cap = @{}
     $Cutoff = Get-OfflineLcuCutoff -Build $Build
-    if ($Cutoff) { $Cap.NotAfter = $Cutoff }
+    if ($Cutoff) {
+        $Cap.NotAfter = $Cutoff
+        Write-OfflineLcuCapNote -Build $Build
+    }
     $Lcu = Get-CatalogLatestEntry -Query "Cumulative Update for $Product for $CatalogArch-based Systems" -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview -BaselineOnly:$BaselineOnly @Cap
     if (-not $Lcu -and -not $script:EffectiveServer) {
         $Lcu = Get-CatalogLatestEntry -Query "Cumulative Update for $(Get-CatalogProductQuery) for $CatalogArch-based Systems" -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview -BaselineOnly:$BaselineOnly @Cap

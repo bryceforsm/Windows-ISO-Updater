@@ -117,7 +117,10 @@ if ($RecoveryIsoOnly) {
                 # Bounded by the cumulative update's date as in a full build, offline cap included, so both modes pick the same package.
                 $Cap = @{}
                 $Cutoff = Get-OfflineLcuCutoff -Build $ImageBuild
-                if ($Cutoff) { $Cap.NotAfter = $Cutoff }
+                if ($Cutoff) {
+                    $Cap.NotAfter = $Cutoff
+                    Write-OfflineLcuCapNote -Build $ImageBuild
+                }
                 $Lcu = Get-CatalogLatestEntry -Query "Cumulative Update for $Product for $CatalogArch-based Systems" -TitleInclude '(?i)cumulative update (preview )?for (windows|microsoft server operating system)' -TitleExclude (Get-LcuTitleExclude) -AllowPreview:$IncludePreview @Cap
                 $SafeOsArgs = Get-DynamicUpdateSearch -Product $Product -CatalogArch $CatalogArch
                 $SafeOsArgs.DownloadDir = $DlDir
