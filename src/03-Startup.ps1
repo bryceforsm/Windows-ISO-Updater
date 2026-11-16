@@ -6,7 +6,7 @@ $script:ScriptPath = $PSCommandPath
 
 # Kept in step with the header comment by tools\Update-Version.ps1, and shown in the log and recorded in
 # the build stamp so a finished ISO can be traced back to the exact script that built it.
-$ScriptVersion = '2026.11.15.1'
+$ScriptVersion = '2026.11.15.2'
 
 # A scheduled run has nobody to answer a prompt.
 if ($Scheduled) {
@@ -315,6 +315,10 @@ $script:FinalBuildString = $null
 $script:FinalImageLocale = $null
 # The source media's installation language, the fallback whenever no image was mounted to read the hive.
 $script:MediaLanguage = $null
+# Set when an offline update cap held this build's cumulative update back, for the ISO's record and the build
+# stamp. The build it was last logged for keeps the note to once per run.
+$script:OfflineLcuCapRecord = $null
+$script:OfflineLcuCapNoted  = $null
 # Filled in as servicing happens, because by the time the tattoo is written the images are already
 # dismounted and DISM's own log is the only other record of which package landed on which image.
 $script:TattooServicing   = New-Object System.Collections.Generic.List[object]

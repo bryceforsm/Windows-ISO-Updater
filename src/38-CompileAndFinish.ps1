@@ -156,8 +156,10 @@ if (-not $NoStamp) {
             }
             Updates         = [ordered]@{
                 # What the catalog was offering at build time - this is what a later run compares against.
-                Catalog = @($script:ExpectedUpdateSet | Where-Object { $_ })
-                Files   = $UpdateRecords
+                Catalog    = @($script:ExpectedUpdateSet | Where-Object { $_ })
+                # Set when an offline cap chose the cumulative update. Informational, not compared.
+                OfflineCap = $script:OfflineLcuCapRecord
+                Files      = $UpdateRecords
             }
             Output          = [ordered]@{
                 Path     = $OutputIsoPath
