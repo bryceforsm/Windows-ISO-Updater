@@ -199,8 +199,17 @@ Describe 'The offline cumulative update cap' {
         Get-OfflineLcuCutoff -Build $Build | Should -Be ([datetime]'2025-10-31')
     }
 
+    It 'caps <Name> (build <Build>) at the end of its support month' -TestCases @(
+        @{ Name = 'Windows Server 2016'; Build = 14393; Cutoff = '2027-01-31' }
+        @{ Name = 'Windows Server 2019'; Build = 17763; Cutoff = '2029-01-31' }
+        @{ Name = 'Windows Server 2022'; Build = 20348; Cutoff = '2031-10-31' }
+        @{ Name = 'Windows Server 2025'; Build = 26100; Cutoff = '2034-11-30' }
+    ) {
+        Get-OfflineLcuCutoff -Build $Build | Should -Be ([datetime]$Cutoff)
+    }
+
     It 'leaves build <Build> uncapped' -TestCases @(
-        @{ Build = 0 }, @{ Build = 17763 }, @{ Build = 18363 }, @{ Build = 20348 }, @{ Build = 26100 }
+        @{ Build = 0 }, @{ Build = 10240 }, @{ Build = 14392 }, @{ Build = 14394 }, @{ Build = 18363 }, @{ Build = 19040 }, @{ Build = 19046 }, @{ Build = 22631 }, @{ Build = 25398 }, @{ Build = 26200 }
     ) {
         Get-OfflineLcuCutoff -Build $Build | Should -BeNullOrEmpty
     }
@@ -214,6 +223,18 @@ Describe 'The offline cumulative update cap' {
         }
         $Entry = Get-CatalogLatestEntry -Query 'Cumulative Update' -NotAfter (Get-OfflineLcuCutoff -Build 19044)
         $Entry.Title | Should -Match 'KB5066791'
+    }
+
+    It 'passes over the February 2027 update for Windows Server 2016 media' {
+        # Placeholder KB numbers: these updates have not been published yet.
+        Mock Search-UpdateCatalog {
+            @(
+                [pscustomobject]@{ Title = '2027-01 Cumulative Update for Windows Server 2016 for x64-based Systems (KB5900001)'; LastUpdated = [datetime]'2027-01-12'; SizeMB = 1700; Guid = 'jan' }
+                [pscustomobject]@{ Title = '2027-02 Cumulative Update for Windows Server 2016 for x64-based Systems (KB5900002)'; LastUpdated = [datetime]'2027-02-09'; SizeMB = 1700; Guid = 'feb' }
+            )
+        }
+        $Entry = Get-CatalogLatestEntry -Query 'Cumulative Update' -NotAfter (Get-OfflineLcuCutoff -Build 14393)
+        $Entry.Title | Should -Match 'KB5900001'
     }
 
     It "searches again by month when the catalog's 25 newest results are all past the cap" {

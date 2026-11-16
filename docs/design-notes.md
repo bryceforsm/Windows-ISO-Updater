@@ -157,6 +157,27 @@ The cutoff comes from where the failures start in public reports, which an LTSC 
 
 If a supplied update or another release fails the same way, the run spots the `ESU: Offline is not supported` line in the package's DISM log and says no ISO can carry that update, instead of blaming the media.
 
+## Why Windows Server Media Stops Before Extended Security Updates
+
+Each Windows Server release is capped at the last cumulative update before its Extended Security Updates begin. Support ends on a Patch Tuesday, so that day's update is the last one before ESU, and the catalog is capped at the end of that month. The updates after it install once Windows is running.
+
+| Build | Media | Leaves extended support | Last update in the ISO |
+| --- | --- | --- | --- |
+| 14393 | Windows Server 2016, Windows 10 LTSB 2016 | 12 January 2027 | January 2027 |
+| 17763 | Windows Server 2019, Windows 10 LTSC 2019 | 9 January 2029 | January 2029 |
+| 20348 | Windows Server 2022 | 14 October 2031 | October 2031 |
+| 26100 | Windows Server 2025, Windows 11 24H2 and LTSC 2024 | 14 November 2034 | November 2034 |
+
+Windows Server 23H2 (build 25398) is an Annual Channel release with no ESU, so it is not capped.
+
+Unlike the Windows 10 cap, these are predictions. Windows 7, Server 2008 and Windows 10 ESU updates all refused offline images, so each Server release's are expected to as well, but nobody can try that before the first ESU update is published. The caps are in place ahead of time because they cost nothing until then: no update after a cutoff exists yet, so a cap holds nothing back. It is also the safer way to be wrong. If a cap is unnecessary, the ISO is a month or two behind until its row is removed. If a cap were missing and the prediction held, every build of that release would spend the update's full install time on a failure and ship with no update at all.
+
+The first build after each cutoff settles it. Run it with the first ESU update supplied directly, using `-UpdatePath`, which skips the catalog and so gets past the cap. If DISM logs `ESU: Offline is not supported`, the cap stays and its comment in `Get-OfflineLcuCutoff` is marked confirmed. If the update installs, its row is removed. Server 2016 is first, with the February 2027 update due on 9 February 2027.
+
+Build 26100 is shared with Windows 11 24H2 and Windows 11 Enterprise LTSC 2024, which leave support earlier. Windows 11 has no ESU program, so their end dates are not expected to add an ESU step, and the cap follows Server 2025. Windows 10 is a warning, though: its 22H2 ESU step went into the update LTSC 2021 shares while LTSC 2021 was still supported. If a 26100 update starts refusing offline images before 2034, that is the likely reason, and the run's ESU tip will say so.
+
+ESU updates are only offered by Windows Update to a server enrolled in Extended Security Updates, so a server built from one of these ISOs stays at its cutoff unless it is enrolled. The ISO cannot change that either way.
+
 ## How the Dynamic Updates Are Told Apart
 
 Windows 11 titles its Dynamic Updates *Setup Dynamic Update* and *Safe OS Dynamic Update*. Windows 10 and Windows Server title both plain *Dynamic Update*, so a filter on the words finds neither, and their sizes cannot be trusted to tell them apart: in July 2025 the Windows 10 Safe OS update was 13 MB and the Setup one 22 MB. Each update's catalog details page does say which it is. Its description reads `ComponentUpdate:` for a Safe OS update and `SetupUpdate:` for a Setup one, which matched the Microsoft support page for every Windows 10 and Server update checked. The script reads those descriptions newest first and stops at the first one of the kind it wants, so it is usually one or two requests, made to the same site the search already uses. The support pages themselves are not used, because support.microsoft.com answers Windows PowerShell 5.1 once and then refuses it.

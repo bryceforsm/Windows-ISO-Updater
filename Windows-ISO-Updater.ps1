@@ -1,6 +1,6 @@
 # GENERATED FILE. Edit the files in src\ and run tools\Build-Script.ps1, because changes made here are overwritten.
 # Windows ISO Updater
-# Version: 2026.11.07.5   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
+# Version: 2026.11.15.1   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
 #
 #region Script overview
 # This script builds a fully up-to-date ("slipstreamed") Windows 11, Windows 10 or Windows Server
@@ -314,7 +314,7 @@ $script:ScriptPath = $PSCommandPath
 
 # Kept in step with the header comment by tools\Update-Version.ps1, and shown in the log and recorded in
 # the build stamp so a finished ISO can be traced back to the exact script that built it.
-$ScriptVersion = '2026.11.07.5'
+$ScriptVersion = '2026.11.15.1'
 
 # A scheduled run has nobody to answer a prompt.
 if ($Scheduled) {
@@ -1950,14 +1950,40 @@ function Select-HotpatchBaselineEntry {
 }
 
 # The newest cumulative update DISM can integrate into an offline image of this build, or $null for no limit.
-# From November 2025 the Windows 10 2004-22H2 updates (builds 19041-19045, which includes LTSC 2021) carry an
-# Extended Security Updates step that refuses an offline image: it logs "ESU: Offline is not supported" and DISM
-# then calls the image unserviceable. October 2025's is the last one that goes in, so the catalog is capped there
-# and the newer updates install once Windows is running. Any LCU lookup that must agree with the download step
-# (the build stamp, the recovery ISO's Safe OS bound) applies the same cap.
+# Once a release leaves support, its cumulative updates carry an Extended Security Updates step that refuses an
+# offline image: it logs "ESU: Offline is not supported" and DISM then calls the image unserviceable. The last
+# update before ESU is the last one that goes in, so the catalog is capped there and the newer updates install
+# once Windows is running. Any LCU lookup that must agree with the download step (the build stamp, the recovery
+# ISO's Safe OS bound) applies the same cap. Adding a release that reaches end of support is one row here.
+#
+# - 19041-19045, Windows 10 2004-22H2 including LTSC 2021: confirmed. Every update from November 2025 fails
+#   offline, which public reports and an LTSC 2021 build here both show.
+#
+# Every other row is expected, not confirmed. Windows 7, Server 2008 and Windows 10 ESU updates all refused offline
+# images, and each Server release's are expected to do the same. Each cutoff is the end of the month in which the
+# build's last edition leaves extended support, because that month's Patch Tuesday update is the last before ESU.
+# Once the first update after a cutoff has been tried offline (supplied with -UpdatePath, which skips the catalog),
+# mark its row confirmed, or remove it if the update installs.
+# - 14393, Windows Server 2016 and Windows 10 LTSB 2016: Server 2016 leaves support on 12 January 2027.
+# - 17763, Windows Server 2019 and Windows 10 LTSC 2019: both leave support on 9 January 2029.
+# - 20348, Windows Server 2022: leaves support on 14 October 2031.
+# - 26100, Windows Server 2025, which shares the build with Windows 11 24H2 and LTSC 2024: Server 2025 leaves
+#   support on 14 November 2034. Windows 11 has no ESU program, so its earlier end dates are not expected to add
+#   an ESU step, but Windows 10 22H2 did add one to LTSC 2021's shared update while LTSC 2021 was still supported.
+#   If a 26100 update starts refusing offline images before 2034, that is the reason.
+# - 25398, Windows Server 23H2, is an Annual Channel release with no ESU, so it has no row.
 function Get-OfflineLcuCutoff {
     param([int]$Build)
-    if ($Build -ge 19041 -and $Build -le 19045) { return [datetime]::new(2025, 10, 31) }
+    $Cutoffs = @(
+        @{ First = 19041; Last = 19045; Cutoff = [datetime]::new(2025, 10, 31) }
+        @{ First = 14393; Last = 14393; Cutoff = [datetime]::new(2027, 1, 31) }
+        @{ First = 17763; Last = 17763; Cutoff = [datetime]::new(2029, 1, 31) }
+        @{ First = 20348; Last = 20348; Cutoff = [datetime]::new(2031, 10, 31) }
+        @{ First = 26100; Last = 26100; Cutoff = [datetime]::new(2034, 11, 30) }
+    )
+    foreach ($Row in $Cutoffs) {
+        if ($Build -ge $Row.First -and $Build -le $Row.Last) { return $Row.Cutoff }
+    }
     return $null
 }
 
