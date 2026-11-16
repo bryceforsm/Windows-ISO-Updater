@@ -226,11 +226,17 @@ function Select-HotpatchBaselineEntry {
 #   offline, which public reports and an LTSC 2021 build here both show.
 #
 # Every other row is expected, not confirmed. Windows 7, Server 2008 and Windows 10 ESU updates all refused offline
-# images, and each Server release's are expected to do the same. Each cutoff is the end of the month in which the
-# build's last edition leaves extended support, because that month's Patch Tuesday update is the last before ESU.
-# Once the first update after a cutoff has been tried offline (supplied with -UpdatePath, which skips the catalog),
-# mark its row confirmed, or remove it if the update installs.
-# - 14393, Windows Server 2016 and Windows 10 LTSB 2016: Server 2016 leaves support on 12 January 2027.
+# images, and each release's are expected to do the same. Each cutoff is the end of the month in which the media
+# leaves support for a paid ESU program, because that month's Patch Tuesday update is the last before ESU. A row
+# can apply to Server media only, client media only, or both (Media = 'Server', 'Client' or 'Any'). Once the first
+# update after a cutoff has been tried offline (supplied with -UpdatePath, which skips the catalog), mark its row
+# confirmed, or move or remove it if the update installs.
+# - 14393, Windows 10 LTSB 2016 (client media): left support for paid ESU on 13 October 2026.
+# - 14393, Windows Server 2016 (Server media): leaves support on 12 January 2027, so it keeps getting updates until
+#   then. The risk is that LTSB 2016 and Server 2016 install the same update package, and Windows 10 put its ESU
+#   step into the update LTSC 2021 shares with 22H2 when 22H2 entered ESU, while LTSC 2021 was still supported. If
+#   November 2026's update (KB5131291) refuses an offline Server 2016 image the same way, move this row to October
+#   2026. Until then a failure is caught by the ESU check after DISM runs, and that edition ships unupdated.
 # - 17763, Windows Server 2019 and Windows 10 LTSC 2019: both leave support on 9 January 2029.
 # - 20348, Windows Server 2022: leaves support on 14 October 2031.
 # - 26100, Windows Server 2025, which shares the build with Windows 11 24H2 and LTSC 2024: Server 2025 leaves
@@ -239,25 +245,34 @@ function Select-HotpatchBaselineEntry {
 #   If a 26100 update starts refusing offline images before 2034, that is the reason.
 # - 25398, Windows Server 23H2, is an Annual Channel release with no ESU, so it has no row.
 #
-# Returns the row (Release, Cutoff, Confirmed) for this build, or $null when it has no cap.
+# Returns the row (Release, Cutoff, Confirmed) for this build and kind of media, or $null when it has no cap.
+# -Server defaults to what the run detected, so callers only pass it when they know better.
 function Get-OfflineLcuCap {
-    param([int]$Build)
-    $Caps = @(
-        @{ First = 19041; Last = 19045; Release = 'Windows 10 2004-22H2'; Cutoff = [datetime]::new(2025, 10, 31); Confirmed = $true }
-        @{ First = 14393; Last = 14393; Release = 'Windows Server 2016';  Cutoff = [datetime]::new(2027, 1, 31);  Confirmed = $false }
-        @{ First = 17763; Last = 17763; Release = 'Windows Server 2019';  Cutoff = [datetime]::new(2029, 1, 31);  Confirmed = $false }
-        @{ First = 20348; Last = 20348; Release = 'Windows Server 2022';  Cutoff = [datetime]::new(2031, 10, 31); Confirmed = $false }
-        @{ First = 26100; Last = 26100; Release = 'Windows Server 2025';  Cutoff = [datetime]::new(2034, 11, 30); Confirmed = $false }
+    param(
+        [int]$Build,
+        [bool]$Server = [bool]$script:EffectiveServer
     )
+    $Caps = @(
+        @{ First = 19041; Last = 19045; Media = 'Any';    Release = 'Windows 10 2004-22H2'; Cutoff = [datetime]::new(2025, 10, 31); Confirmed = $true }
+        @{ First = 14393; Last = 14393; Media = 'Client'; Release = 'Windows 10 LTSB 2016'; Cutoff = [datetime]::new(2026, 10, 31); Confirmed = $false }
+        @{ First = 14393; Last = 14393; Media = 'Server'; Release = 'Windows Server 2016';  Cutoff = [datetime]::new(2027, 1, 31);  Confirmed = $false }
+        @{ First = 17763; Last = 17763; Media = 'Any';    Release = 'Windows Server 2019';  Cutoff = [datetime]::new(2029, 1, 31);  Confirmed = $false }
+        @{ First = 20348; Last = 20348; Media = 'Any';    Release = 'Windows Server 2022';  Cutoff = [datetime]::new(2031, 10, 31); Confirmed = $false }
+        @{ First = 26100; Last = 26100; Media = 'Any';    Release = 'Windows Server 2025';  Cutoff = [datetime]::new(2034, 11, 30); Confirmed = $false }
+    )
+    $Kind = if ($Server) { 'Server' } else { 'Client' }
     foreach ($Row in $Caps) {
-        if ($Build -ge $Row.First -and $Build -le $Row.Last) { return $Row }
+        if ($Build -ge $Row.First -and $Build -le $Row.Last -and $Row.Media -in 'Any', $Kind) { return $Row }
     }
     return $null
 }
 
 function Get-OfflineLcuCutoff {
-    param([int]$Build)
-    $Cap = Get-OfflineLcuCap -Build $Build
+    param(
+        [int]$Build,
+        [bool]$Server = [bool]$script:EffectiveServer
+    )
+    $Cap = Get-OfflineLcuCap -Build $Build -Server $Server
     if ($Cap) { return $Cap.Cutoff }
     return $null
 }
@@ -268,9 +283,10 @@ function Get-OfflineLcuCutoff {
 function Get-OfflineLcuCapNote {
     param(
         [int]$Build,
-        [datetime]$Now = (Get-Date)
+        [datetime]$Now = (Get-Date),
+        [bool]$Server = [bool]$script:EffectiveServer
     )
-    $Cap = Get-OfflineLcuCap -Build $Build
+    $Cap = Get-OfflineLcuCap -Build $Build -Server $Server
     if (-not $Cap -or $Now -le $Cap.Cutoff) { return $null }
     $Month = $Cap.Cutoff.ToString('MMMM yyyy', [System.Globalization.CultureInfo]::InvariantCulture)
     $Message =
@@ -296,9 +312,10 @@ function Get-OfflineLcuCapNote {
 function Write-OfflineLcuCapNote {
     param(
         [int]$Build,
-        [datetime]$Now = (Get-Date)
+        [datetime]$Now = (Get-Date),
+        [bool]$Server = [bool]$script:EffectiveServer
     )
-    $Note = Get-OfflineLcuCapNote -Build $Build -Now $Now
+    $Note = Get-OfflineLcuCapNote -Build $Build -Now $Now -Server $Server
     if (-not $Note) { return }
     $script:OfflineLcuCapRecord = $Note.Record
     if ($script:OfflineLcuCapNoted -eq $Build) { return }

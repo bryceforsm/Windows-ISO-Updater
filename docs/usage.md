@@ -121,6 +121,15 @@ management tool, or on their own with the
 A newer update supplied with `-UpdatePath` fails the same way. That edition then ships as the source media
 had it, and the run's tip names the ESU step as the cause. [Why the cap exists](design-notes.md#why-windows-10-stops-at-the-october-2025-update).
 
+### Windows 10 LTSB 2016 Stops at the October 2026 Update
+
+Windows 10 Enterprise LTSB 2016 and IoT Enterprise LTSB 2016 (version 1607) left support on 13 October
+2026, and their later updates are Extended Security Updates. LTSB 2016 media is updated only as far as the
+**October 2026** cumulative update, for the same reason as above, and the log says so. Windows Server
+2016 media is the same build but keeps getting updates until January 2027 (see
+[Windows Server Specific Notes](#windows-server-specific-notes)). The LTSB 2016 cap is expected, not yet
+confirmed by a real build.
+
 ## Windows Server Specific Notes
 
 A few differences worth knowing:
@@ -143,8 +152,11 @@ A few differences worth knowing:
   So Server media is updated only as far as the month its support ends, and the log says so when the search
   runs. The later updates install once Windows is running, and only on a server enrolled in ESU. The last
   update in the ISO is January 2027 for Server 2016, January 2029 for Server 2019, October 2031 for Server
-  2022 and November 2034 for Server 2025. Server 2016 is the first to reach its cap. Until a real build has
-  tried each release's first ESU update, its cap is a prediction, not a confirmed limit
+  2022 and November 2034 for Server 2025. Server 2016 is the first to reach its cap. It shares build 14393
+  with Windows 10 LTSB 2016, which is capped at October 2026, and both install the same update package. If
+  the November 2026 update refuses an offline Server 2016 image, the run says the ESU step is the cause and
+  that edition ships unupdated. Until a real build has tried each release's first ESU update, its cap is a
+  prediction, not a confirmed limit
   ([why the caps are in place ahead of time](design-notes.md#why-windows-server-media-stops-before-extended-security-updates)).
 - `-Server` is **deprecated and no longer needed**. The image is the source of truth, so a Server ISO passed with `-IsoPath` or dropped into the download folder is recognised on its own, and a yellow line names what was found whenever it differs from what the run expected. The switch is still accepted so existing scheduled tasks and wrapper scripts keep running. Before any ISO is in hand the only thing that can tell Server from client is the last build stamp in the same working folder, which is what stops a scheduled Server run whose ISO went missing from downloading client media instead.
 - **Give Server its own working folder if you also build client ISOs.** See

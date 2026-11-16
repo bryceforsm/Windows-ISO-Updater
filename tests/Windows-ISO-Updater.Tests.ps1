@@ -200,12 +200,19 @@ Describe 'The offline cumulative update cap' {
     }
 
     It 'caps <Name> (build <Build>) at the end of its support month' -TestCases @(
-        @{ Name = 'Windows Server 2016'; Build = 14393; Cutoff = '2027-01-31' }
-        @{ Name = 'Windows Server 2019'; Build = 17763; Cutoff = '2029-01-31' }
-        @{ Name = 'Windows Server 2022'; Build = 20348; Cutoff = '2031-10-31' }
-        @{ Name = 'Windows Server 2025'; Build = 26100; Cutoff = '2034-11-30' }
+        @{ Name = 'Windows 10 LTSB 2016'; Build = 14393; Server = $false; Cutoff = '2026-10-31' }
+        @{ Name = 'Windows Server 2016';  Build = 14393; Server = $true;  Cutoff = '2027-01-31' }
+        @{ Name = 'Windows Server 2019';  Build = 17763; Server = $true;  Cutoff = '2029-01-31' }
+        @{ Name = 'Windows 10 LTSC 2019'; Build = 17763; Server = $false; Cutoff = '2029-01-31' }
+        @{ Name = 'Windows Server 2022';  Build = 20348; Server = $true;  Cutoff = '2031-10-31' }
+        @{ Name = 'Windows Server 2025';  Build = 26100; Server = $true;  Cutoff = '2034-11-30' }
     ) {
-        Get-OfflineLcuCutoff -Build $Build | Should -Be ([datetime]$Cutoff)
+        Get-OfflineLcuCutoff -Build $Build -Server $Server | Should -Be ([datetime]$Cutoff)
+    }
+
+    It 'names the release that matches the media for the shared 1607 build' {
+        (Get-OfflineLcuCap -Build 14393 -Server $false).Release | Should -Be 'Windows 10 LTSB 2016'
+        (Get-OfflineLcuCap -Build 14393 -Server $true).Release | Should -Be 'Windows Server 2016'
     }
 
     It 'leaves build <Build> uncapped' -TestCases @(
@@ -216,12 +223,23 @@ Describe 'The offline cumulative update cap' {
 
     It 'marks only the Windows 10 cap as confirmed' {
         (Get-OfflineLcuCap -Build 19045).Confirmed | Should -BeTrue
-        foreach ($Build in 14393, 17763, 20348, 26100) { (Get-OfflineLcuCap -Build $Build).Confirmed | Should -BeFalse }
+        foreach ($Build in 14393, 17763, 20348, 26100) {
+            (Get-OfflineLcuCap -Build $Build -Server $true).Confirmed | Should -BeFalse
+        }
+        (Get-OfflineLcuCap -Build 14393 -Server $false).Confirmed | Should -BeFalse
     }
 
     It 'says nothing about a cap before its cutoff has passed' {
-        Get-OfflineLcuCapNote -Build 14393 -Now ([datetime]'2026-11-15') | Should -BeNullOrEmpty
-        Get-OfflineLcuCapNote -Build 14393 -Now ([datetime]'2027-01-31') | Should -BeNullOrEmpty
+        Get-OfflineLcuCapNote -Build 14393 -Server $true -Now ([datetime]'2026-11-15') | Should -BeNullOrEmpty
+        Get-OfflineLcuCapNote -Build 14393 -Server $true -Now ([datetime]'2027-01-31') | Should -BeNullOrEmpty
+        Get-OfflineLcuCapNote -Build 14393 -Server $false -Now ([datetime]'2026-10-31') | Should -BeNullOrEmpty
+    }
+
+    It 'reports the Windows 10 LTSB 2016 cap now that its cutoff has passed' {
+        $Note = Get-OfflineLcuCapNote -Build 14393 -Server $false -Now ([datetime]'2026-11-15')
+        $Note.Message | Should -Match 'Windows 10 LTSB 2016'
+        $Note.Message | Should -Match 'capped at the October 2026 cumulative update'
+        $Note.Record.NotAfter | Should -Be '2026-10'
     }
 
     It 'says nothing for a build with no cap' {
@@ -237,7 +255,7 @@ Describe 'The offline cumulative update cap' {
     }
 
     It 'reports an unconfirmed cap as a prediction once its cutoff has passed' {
-        $Note = Get-OfflineLcuCapNote -Build 14393 -Now ([datetime]'2027-02-10')
+        $Note = Get-OfflineLcuCapNote -Build 14393 -Server $true -Now ([datetime]'2027-02-10')
         $Note.Message | Should -Match 'Windows Server 2016'
         $Note.Message | Should -Match 'capped at the January 2027 cumulative update'
         $Note.Message | Should -Match 'not been confirmed'
@@ -260,7 +278,7 @@ Describe 'The offline cumulative update cap' {
         Mock Write-HostTimestamp {}
         $script:OfflineLcuCapRecord = $null
         $script:OfflineLcuCapNoted = $null
-        Write-OfflineLcuCapNote -Build 14393 -Now ([datetime]'2026-11-15')
+        Write-OfflineLcuCapNote -Build 14393 -Server $true -Now ([datetime]'2026-11-15')
         Should -Invoke Write-HostTimestamp -Times 0 -Exactly
         $script:OfflineLcuCapRecord | Should -BeNullOrEmpty
     }
@@ -284,8 +302,19 @@ Describe 'The offline cumulative update cap' {
                 [pscustomobject]@{ Title = '2027-02 Cumulative Update for Windows Server 2016 for x64-based Systems (KB5900002)'; LastUpdated = [datetime]'2027-02-09'; SizeMB = 1700; Guid = 'feb' }
             )
         }
-        $Entry = Get-CatalogLatestEntry -Query 'Cumulative Update' -NotAfter (Get-OfflineLcuCutoff -Build 14393)
+        $Entry = Get-CatalogLatestEntry -Query 'Cumulative Update' -NotAfter (Get-OfflineLcuCutoff -Build 14393 -Server $true)
         $Entry.Title | Should -Match 'KB5900001'
+    }
+
+    It 'passes over the November 2026 update for Windows 10 LTSB 2016 media but not for Server 2016' {
+        Mock Search-UpdateCatalog {
+            @(
+                [pscustomobject]@{ Title = '2026-10 Cumulative Update for Windows 10 Version 1607 for x64-based Systems (KB5126868)'; LastUpdated = [datetime]'2026-10-13'; SizeMB = 1700; Guid = 'oct' }
+                [pscustomobject]@{ Title = '2026-11 Cumulative Update for Windows 10 Version 1607 for x64-based Systems (KB5131291)'; LastUpdated = [datetime]'2026-11-10'; SizeMB = 1700; Guid = 'nov' }
+            )
+        }
+        (Get-CatalogLatestEntry -Query 'Cumulative Update' -NotAfter (Get-OfflineLcuCutoff -Build 14393 -Server $false)).Title | Should -Match 'KB5126868'
+        (Get-CatalogLatestEntry -Query 'Cumulative Update' -NotAfter (Get-OfflineLcuCutoff -Build 14393 -Server $true)).Title | Should -Match 'KB5131291'
     }
 
     It "searches again by month when the catalog's 25 newest results are all past the cap" {
