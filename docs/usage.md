@@ -2,7 +2,7 @@
 
 # How to Run This Script
 
-The easiest and recommended way to run this script is by using the `Run-Windows-ISO-Updater.bat` file. It automatically handles administrator elevation and PowerShell execution policies.
+The easiest and recommended way to run this script is by using the `Run-Windows-ISO-Updater.bat` file. It automatically handles administrator elevation and PowerShell execution policies. It runs the script in PowerShell 7 when that is installed, and otherwise in the Windows PowerShell 5.1 built into Windows. To use Windows PowerShell on a machine that has PowerShell 7, start the script with `powershell.exe -File .\Windows-ISO-Updater.ps1` instead.
 
 **As long as you use the batch file, no setup or PowerShell experience is needed.** It requests administrator rights through the normal UAC prompt and runs the script with `-ExecutionPolicy Bypass` scoped to that single run, so your system-wide execution policy is never changed. Running the `.ps1` by hand works too, but then elevation and execution policy are on you.
 
