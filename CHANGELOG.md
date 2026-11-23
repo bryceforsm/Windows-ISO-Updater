@@ -4,6 +4,8 @@ What changed in each release. Versions are dates, `yyyy.MM.dd.<revision>`. Relea
 
 ## [Unreleased]
 
+## [2026.11.22.9](https://github.com/bryceforsm/Windows-ISO-Updater/releases/tag/2026.11.22.9) - 2026-11-22
+
 ### Added
 
 - `-IgnoreMissingIso` stops a run from rebuilding only because the ISO from the last build is no longer where it was written, for when something else moves or deletes it afterwards. The log still notes that it is gone, and a changed source ISO, build parameter or update still triggers a rebuild. See [When a run decides to rebuild](docs/scheduled-runs.md#when-a-run-decides-to-rebuild).
@@ -28,6 +30,11 @@ What changed in each release. Versions are dates, `yyyy.MM.dd.<revision>`. Relea
 - Windows Server media is now updated only as far as the last cumulative update before its Extended Security Updates begin: October 2026 for Windows 10 LTSB 2016 and January 2027 for Server 2016 (the same build, told apart by whether the media is Server), January 2029 for Server 2019 (and Windows 10 LTSC 2019), October 2031 for Server 2022 and November 2034 for Server 2025. ESU updates are expected to refuse an offline image the way Windows 10's have since November 2025, and without a cap each build would fail on the update and ship that edition with no update at all. LTSB 2016's cap applies from now, since its first ESU update was published in November 2026. The others change nothing until a release's first ESU update is published, starting with Server 2016 in February 2027, and a cap will be removed if that update turns out to install offline. The later updates install once Windows is running, on a server enrolled in ESU. See [Windows Server Specific Notes](docs/usage.md#windows-server-specific-notes).
 - The log line about an offline update cap now appears only once the cap can hold an update back, when its cutoff has passed. Before, Windows 10 media printed it on every run, and Server media would have said its updates carried an ESU step years before support ended. The line names the release, and for a cap that has not been confirmed yet it says so and suggests `-UpdatePath` to try a newer update. It is also logged when a recovery ISO is built or the build stamp is checked, once per run.
 - The `\WISO-Build` record and the build stamp now include `Updates.OfflineCap` when a cap chose the cumulative update: the release, the last month allowed, and whether the cap is confirmed. A Server 2016 ISO in 2028 then explains why it carries the January 2027 update. See [The Build Record on the ISO](docs/reference.md#the-build-record-on-the-iso).
+
+### Fixed
+
+- A working folder or output path with a space in it no longer breaks the step that recompiles the ISO. oscdimg's arguments are now quoted, for the recovery ISO too.
+- `ISO mounted at D:\` and `Dismounted the source ISO.` are now reported inside the steps that mount and extract the ISO, rather than on their own after those steps had finished.
 
 ## [2026.11.07.5](https://github.com/bryceforsm/Windows-ISO-Updater/releases/tag/2026.11.07.5) - 2026-11-07
 
