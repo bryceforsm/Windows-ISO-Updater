@@ -57,6 +57,9 @@ param(
     [Parameter(HelpMessage = 'Allow the optional preview updates Microsoft publishes late in the month (titled "... Preview of Monthly Quality Rollup" or "Cumulative Update Preview") to be selected. They are excluded by default because they are next month''s fixes released early for testing, so they carry a higher build than anything Windows Update will offer the finished media. Useful for validating a coming update, not for production media')]
     [switch]$IncludePreview,
 
+    [Parameter(HelpMessage = 'Turn off the offline update cap, so media whose release has entered Extended Security Updates (Windows 10 after October 2025, Windows 10 LTSB 2016 after October 2026, and each Windows Server release once its support ends) gets the catalog''s newest cumulative update instead of the last one before ESU. WARNING: this will likely break the build. ESU updates refuse to install on an offline image, so DISM fails on the update and that edition ships without it. The script has no workaround for ESU updates offline')]
+    [switch]$IgnoreOfflineUpdateCap,
+
     [Parameter(HelpMessage = 'Mount the image read-only and read its real patch level from the registry before deciding whether the cumulative update is needed. By default the build recorded in the WIM header is trusted, which is instant but is wrong on some media (UUP-built and Media Creation Tool images can report an old revision while being fully patched, or the reverse). Costs a few minutes')]
     [switch]$VerifyPatchLevel,
 
