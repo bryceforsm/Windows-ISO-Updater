@@ -7,7 +7,7 @@ The script supports the following optional parameters:
 | Parameter | Description |
 |---|---|
 | `-ConfigPath` | Path to a JSON profile holding build settings, named after these parameters. Anything also passed on the command line wins. Relative paths inside it are relative to the profile. See [Using a JSON Profile](usage.md#using-a-json-profile) for what can go in one. |
-| `-Unattended` | Runs the script without any confirmation prompts. |
+| `-Unattended` | Runs the script without any confirmation prompts, including the one before a new working folder is created. |
 | `-IsoPath` | Path to an existing Windows ISO to update instead of downloading one from Microsoft. May also be a **folder**, in which case the most recently modified `.iso` over 3 GB directly inside it is used by default. That search is **not recursive**, so an ISO in a subfolder is not found. Omit the parameter entirely and the same rule is applied to the download folder. An ISO on a cloud-synced or network path is copied to the download folder first. |
 | `-UseLargestIso` | When `-IsoPath` (or the download folder) is a directory holding more than one `.iso`, pick the largest one instead of the most recently modified one. |
 | `-WindowsVersion` | Windows version to download when no ISO is supplied: `10` or `11`. Defaults to `11`. Once an ISO is mounted, catalog searches use the version the image itself reports, not this parameter, so it does not need to match media supplied with `-IsoPath`. |
@@ -64,7 +64,7 @@ The script supports the following optional parameters:
 | `-OscdimgUrl` | Override the Microsoft symbol server URL used to download the standalone `oscdimg.exe`. |
 | `-OscdimgSha256` | Expected SHA-256 of the downloaded `oscdimg.exe`. Pass an empty string to skip the hash check when overriding `-OscdimgUrl`. |
 | `-LogPath` | Directory to write log files to. Defaults to a `Logs` folder inside the working folder. |
-| `-SkipInteractive` | Skips the interactive confirmation prompt (still shows output). |
+| `-SkipInteractive` | Skips the interactive confirmation prompts, including the one before a new working folder is created (still shows output). |
 | `-SkipVersionCheck` | Skip checking GitHub for a newer release of the script. **By default** each run asks GitHub for the latest release while it writes the log header, and gives up after 3 seconds, so the check costs a run little or nothing. The console says whether this is the latest release, or which newer one is available. When GitHub cannot be reached, the console says nothing and only the log records it. |
 
 ## Scheduled runs, build stamps and housekeeping

@@ -66,8 +66,9 @@ flowchart LR
    * Drag the ISO onto `Run-Windows-ISO-Updater.bat`.
    * Or put the ISO in `C:\WISO-Work\Downloads`, then double-click `Run-Windows-ISO-Updater.bat`.
 3. Click **Yes** on the administrator prompt. The tool continues in a new window.
-4. Check the summary of what the build will do, then type `Y` to start it.
-5. When the build finishes, the updated ISO is in `C:\WISO-Work\Output`.
+4. On the first run, type `Y` to let it create its working folder, `C:\WISO-Work`. It asks only while that folder doesn't exist yet.
+5. Check the summary of what the build will do, then type `Y` to start it.
+6. When the build finishes, the updated ISO is in `C:\WISO-Work\Output`.
 
 To speed up the update and shrink the ISO, the tool removes the editions you are unlikely to need. On client media it keeps Enterprise, Pro and Home, and on Server media it keeps one edition, Standard if the ISO has it. Use `-KeepAllEditions` to keep every edition, or `-KeepEditions` to pick which ones stay.
 
