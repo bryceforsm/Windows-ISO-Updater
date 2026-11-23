@@ -48,7 +48,7 @@ function Get-Sha256 {
                     }
                 }
                 elseif ($Percent -ge $NextPercent -and $Timer.Elapsed.TotalSeconds -gt 0) {
-                    Write-HostTimestamp ('    {0}% ({1:N0} MB/s)' -f $Percent, ($Done / 1MB / $Timer.Elapsed.TotalSeconds)) -ForegroundColor DarkGray
+                    Write-HostTimestamp ('    {0}% ({1:N0} MB/s)' -f $Percent, ($Done / 1MB / $Timer.Elapsed.TotalSeconds))
                     $NextPercent = $Percent + 20
                 }
             }
@@ -255,7 +255,7 @@ function Write-BuildStamp {
         $HistoryFile = Join-Path -Path $StampHistoryDir -ChildPath ("stamp_{0}.json" -f (Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'))
         Set-Content -LiteralPath $HistoryFile -Value $Json -Encoding UTF8 -ErrorAction Stop
         Write-HostTimestamp "  Stamp written: $StampFile" -ForegroundColor Green
-        Write-HostTimestamp "  History copy : $HistoryFile" -ForegroundColor DarkGray
+        Write-HostTimestamp "  History copy : $HistoryFile"
         Get-ChildItem -LiteralPath $StampHistoryDir -Filter 'stamp_*.json' -File -ErrorAction SilentlyContinue |
             Sort-Object -Property LastWriteTime -Descending |
             Select-Object -Skip $StampHistoryCount |
@@ -333,7 +333,7 @@ function Set-CachedSha256 {
         Set-Content -LiteralPath $HashCacheFile -Value (Format-Json -Json ($Kept | ConvertTo-Json -Depth 4 -Compress)) -Encoding UTF8 -ErrorAction Stop
     }
     catch {
-        Write-HostTimestamp "  Could not record the hash for a later run: $($_.Exception.Message)" -ForegroundColor DarkGray
+        Write-HostTimestamp "  Could not record the hash for a later run: $($_.Exception.Message)"
     }
 }
 
@@ -350,12 +350,12 @@ function Get-SourceIsoHash {
         "$($Stamp.Source.Path)" -ieq $Item.FullName -and
         "$($Stamp.Source.Length)" -eq "$($Item.Length)" -and
         (Test-SameWriteTime -Recorded $Stamp.Source.LastWriteTimeUtc -Actual $Item.LastWriteTimeUtc)) {
-        Write-HostTimestamp '  The source ISO is untouched since the last run, so its recorded hash is reused.' -ForegroundColor DarkGray
+        Write-HostTimestamp '  The source ISO is untouched since the last run, so its recorded hash is reused.'
         return "$($Stamp.Source.Sha256)"
     }
     $Cached = Get-CachedSha256 -Item $Item
     if ($Cached) {
-        Write-HostTimestamp '  The source ISO was hashed by an earlier run that did not finish, and it has not changed since, so that hash is reused.' -ForegroundColor DarkGray
+        Write-HostTimestamp '  The source ISO was hashed by an earlier run that did not finish, and it has not changed since, so that hash is reused.'
         return $Cached
     }
     Write-HostTimestamp "  Hashing the source ISO ($([math]::Round($Item.Length / 1GB, 2)) GB)..."

@@ -17,7 +17,7 @@ if ($RecoveryIsoOnly -and -not $Unattended -and -not $SkipInteractive -and -not 
     $Confirm = Read-Host "Type 'Y' to continue, or anything else to cancel"
     if ($Confirm -notin @('Y', 'y', 'Yes', 'yes')) {
         Write-HostTimestamp 'Operation cancelled by user.' -ForegroundColor Yellow
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 0
     }
     Write-Host $LineBreak
@@ -65,13 +65,13 @@ if (-not $Unattended -and -not $SkipInteractive -and -not $ListEditions -and -no
         }
         else {
             Write-HostLog "  - Download the latest cumulative update(s)$(if (-not $SkipDotNet) { ' and the latest .NET cumulative update' }) from the Microsoft Update Catalog"
-            Write-HostLog "      (the cumulative update is skipped entirely if the image already has that build)" -ForegroundColor DarkGray
+            Write-HostLog "      (the cumulative update is skipped entirely if the image already has that build)"
             if ($ReapplyUpdates) {
                 Write-HostLog "  - Integrate every update even if the image already has it (-ReapplyUpdates)" -ForegroundColor Yellow
                 Write-HostLog "      WARNING: this may leave the media's Setup binaries mismatched with boot.wim, which can stop Windows 11 Setup Dynamic Update from completing" -ForegroundColor Yellow
             }
             else {
-                Write-HostLog "      (and if it does, the .NET update, Dynamic Updates and boot.wim are left untouched too)" -ForegroundColor DarkGray
+                Write-HostLog "      (and if it does, the .NET update, Dynamic Updates and boot.wim are left untouched too)"
             }
             if ($VerifyPatchLevel) {
                 Write-HostLog "  - Mount the image read-only to confirm its real patch level before deciding (-VerifyPatchLevel)"
@@ -114,7 +114,7 @@ if (-not $Unattended -and -not $SkipInteractive -and -not $ListEditions -and -no
     }
     Write-HostLog "  - Recompile a new bootable ISO with oscdimg"
     if (-not $NoStamp) {
-        Write-HostLog "  - Record a stamp of the finished build in $StampRoot, so a later run can tell that nothing has changed" -ForegroundColor DarkGray
+        Write-HostLog "  - Record a stamp of the finished build in $StampRoot, so a later run can tell that nothing has changed"
     }
     if ($AutoClean) {
         Write-HostLog "  - DELETE the update packages earlier builds downloaded, and every generated ISO except the newest $KeepIsoCount (-AutoClean)" -ForegroundColor Yellow
@@ -126,7 +126,7 @@ if (-not $Unattended -and -not $SkipInteractive -and -not $ListEditions -and -no
     $Confirm = Read-Host "Type 'Y' to continue, or anything else to cancel"
     if ($Confirm -notin @('Y', 'y', 'Yes', 'yes')) {
         Write-HostTimestamp 'Operation cancelled by user.' -ForegroundColor Yellow
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 0
     }
     Write-Host $LineBreak
@@ -161,7 +161,7 @@ if (-not $ListEditions -and -not $CheckOnly) {
     if (-not $Oscdimg) {
         Write-HostTimestamp 'oscdimg.exe was not found and could not be downloaded. It is part of the Windows ADK "Deployment Tools" feature and is required to recompile the ISO.' -ForegroundColor Red
         Write-HostTimestamp 'Re-run with -InstallAdk to have this script download and install the ADK automatically, or install the Windows ADK (Deployment Tools) manually from Microsoft and re-run.' -ForegroundColor Yellow
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
 }
@@ -175,7 +175,7 @@ if ($IsoPath) {
         $FolderIso = Find-SourceIso -Directory $IsoPath -Largest:$UseLargestIso
         if (-not $FolderIso) {
             Write-HostTimestamp "-IsoPath '$IsoPath' is a folder, but it holds no .iso larger than 3 GB. The search is not recursive, so an ISO in a subfolder is not found. Cannot continue." -ForegroundColor Red
-            Stop-Transcript | Out-Null
+            Stop-RunLogging | Out-Null
             exit 1
         }
         $ResolvedIso = $FolderIso.FullName
@@ -188,7 +188,7 @@ if ($IsoPath) {
     }
     else {
         Write-HostTimestamp "The ISO path '$IsoPath' does not exist. Cannot continue." -ForegroundColor Red
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
 
@@ -238,13 +238,13 @@ else {
             Write-HostTimestamp 'No Windows Server ISO was found, and Server media cannot be downloaded automatically (neither Fido nor the Media Creation Tool serves it).' -ForegroundColor Red
             Write-HostTimestamp '  Get the ISO from the Microsoft Evaluation Center, your Volume Licensing Service Center, or a Visual Studio subscription, then re-run with -IsoPath "C:\path\to\Server.iso"' -ForegroundColor Yellow
             Write-HostTimestamp "  or drop the .iso into the download folder and re-run - it is picked up automatically: $DlDir" -ForegroundColor Yellow
-            Stop-Transcript | Out-Null
+            Stop-RunLogging | Out-Null
             exit 1
         }
         # -CheckOnly answers a question, so it never spends 8 GB of bandwidth to do it.
         if ($CheckOnly) {
             Write-HostTimestamp 'No ISO is available locally, so there is nothing to compare against - a build is needed.' -ForegroundColor Yellow
-            Stop-Transcript | Out-Null
+            Stop-RunLogging | Out-Null
             exit 10
         }
         # Fido is opt-in, so without -UseFido this lands on the same fallbacks a blocked link request
@@ -253,7 +253,7 @@ else {
             $ResolvedIso = Get-IsoViaMct -Version $WindowsVersion -Language $Language -Architecture $WinInfo.Architecture -DownloadDir $DlDir
             if (-not $ResolvedIso) {
                 Write-HostTimestamp 'No ISO was produced with the Media Creation Tool. Cannot continue.' -ForegroundColor Red
-                Stop-Transcript | Out-Null
+                Stop-RunLogging | Out-Null
                 exit 1
             }
         }
@@ -289,7 +289,7 @@ else {
                 if (-not $ResolvedIso) {
                     Write-HostTimestamp 'Download the ISO yourself from https://www.microsoft.com/software-download, then either re-run with -IsoPath "C:\path\to\Windows.iso"' -ForegroundColor Yellow
                     Write-HostTimestamp "or simply drop the .iso into the download folder and re-run - it is picked up automatically: $DlDir" -ForegroundColor Yellow
-                    Stop-Transcript | Out-Null
+                    Stop-RunLogging | Out-Null
                     exit 1
                 }
             }
@@ -307,13 +307,13 @@ else {
                 if (-not (Get-FileDownload -Url $script:IsoUrl -Destination $ResolvedIso)) {
                     Write-HostTimestamp 'ISO download failed. Microsoft may be rate-limiting/blocking your IP for repeated ISO requests.' -ForegroundColor Red
                     Write-HostTimestamp 'Download the ISO yourself from https://www.microsoft.com/software-download and re-run with -IsoPath "C:\path\to\Windows.iso".' -ForegroundColor Yellow
-                    Stop-Transcript | Out-Null
+                    Stop-RunLogging | Out-Null
                     exit 1
                 }
                 $SizeGB = [math]::Round((Get-Item -LiteralPath $ResolvedIso).Length / 1GB, 2)
                 if ($SizeGB -lt 3) {
                     Write-HostTimestamp "The downloaded file is only $SizeGB GB - that is too small to be a Windows ISO. The download likely failed." -ForegroundColor Red
-                    Stop-Transcript | Out-Null
+                    Stop-RunLogging | Out-Null
                     exit 1
                 }
                 Write-HostTimestamp "  Download complete ($SizeGB GB)." -ForegroundColor Green

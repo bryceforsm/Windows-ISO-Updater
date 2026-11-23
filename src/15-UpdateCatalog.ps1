@@ -186,7 +186,7 @@ function Get-HotpatchBaselineKb {
         return $null
     }
 
-    Write-HostTimestamp "  Microsoft's hotpatch calendar names KB$($Baseline.Kb) ($($Baseline.Release)) as the latest baseline." -ForegroundColor DarkGray
+    Write-HostTimestamp "  Microsoft's hotpatch calendar names KB$($Baseline.Kb) ($($Baseline.Release)) as the latest baseline."
     $script:HotpatchBaseline = $Baseline
     return $Baseline
 }
@@ -339,7 +339,7 @@ function Write-OfflineLcuCapNote {
     if ($script:OfflineLcuCapNoted -eq $Build) { return }
     $script:OfflineLcuCapNoted = $Build
     if ($Note.Ignored) { Write-HostTimestamp "  $($Note.Message)" -ForegroundColor Yellow }
-    else { Write-HostTimestamp "  $($Note.Message)" -ForegroundColor DarkGray }
+    else { Write-HostTimestamp "  $($Note.Message)" }
 }
 
 # A catalog search returns only its 25 newest matches, so one bounded by an older date can come back with
@@ -527,13 +527,13 @@ function Get-LatestCatalogPackage {
         }
         elseif ($TargetUbr -gt 0) {
             Write-HostTimestamp "  The media header says $CurrentBuild.$CurrentUbr and KB$PrimaryKb delivers $CurrentBuild.$TargetUbr, so the update will be integrated."
-            Write-HostTimestamp '  If this media is already patched and the header is out of date, -VerifyPatchLevel reads the real level and can skip it.' -ForegroundColor DarkGray
+            Write-HostTimestamp '  If this media is already patched and the header is out of date, -VerifyPatchLevel reads the real level and can skip it.'
         }
 
         if ($CurrentAt) {
             if (-not $Reapply) {
                 Write-HostTimestamp "  The image is already at $CurrentAt and KB$PrimaryKb delivers $CurrentBuild.$TargetUbr, so it adds nothing - skipping the download and the integration." -ForegroundColor Green
-                if ($HeaderTrusted) { Write-HostTimestamp '  The header was trusted without mounting the image. Use -VerifyPatchLevel to confirm it against the registry.' -ForegroundColor DarkGray }
+                if ($HeaderTrusted) { Write-HostTimestamp '  The header was trusted without mounting the image. Use -VerifyPatchLevel to confirm it against the registry.' }
                 if ($AlreadyCurrent) { $AlreadyCurrent.Value = $CurrentAt }
                 return $null
             }
@@ -575,7 +575,7 @@ function Get-LatestCatalogPackage {
             Remove-Item -LiteralPath $Destination -Force -ErrorAction Stop
         }
         if (Test-Path -LiteralPath $Destination) {
-            Write-HostTimestamp "  Already downloaded - reusing: $FileName" -ForegroundColor DarkGray
+            Write-HostTimestamp "  Already downloaded - reusing: $FileName"
         }
         else {
             Write-HostTimestamp "  Downloading $FileName ..."

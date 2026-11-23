@@ -1,10 +1,20 @@
 #region Run header
+# A step that throws ends the run with PowerShell's own error. This finishes with the console first (taskbar,
+# title, bell), then lets the error through unchanged. A trap covers the whole script wherever it is written, so
+# it checks that the function exists, for an error raised before the functions are defined.
+trap {
+    if (Get-Command -Name Complete-ConsoleRun -CommandType Function -ErrorAction SilentlyContinue) { Complete-ConsoleRun -Failed }
+    break
+}
+
+# Started now and collected after the environment report, so waiting for GitHub overlaps work the run does anyway.
+$VersionCheck = if (-not $SkipVersionCheck) { Start-VersionCheck }
 Write-Host $LineBreak
 Write-HostTimestamp "Windows ISO Updater v$ScriptVersion (slipstream latest updates into a new ISO) on $($env:ComputerName)" -ForegroundColor Cyan
 Write-HostTimestamp "Run date       : $(Get-FriendlyDate)"
 if ($ConfigPath) {
     Write-HostTimestamp "Profile        : $ConfigPath"
-    Write-HostTimestamp "  Settings applied from it: $(if ($script:ProfileValues.Count -gt 0) { @($script:ProfileValues.Keys) -join ', ' } else { 'none' })" -ForegroundColor DarkGray
+    Write-HostTimestamp "  Settings applied from it: $(if ($script:ProfileValues.Count -gt 0) { @($script:ProfileValues.Keys) -join ', ' } else { 'none' })"
 }
 # Recorded because culture-sensitive parsing (e.g. the catalog's "Last Updated" column) breaks only on
 # non-en-US machines, so the log needs to say what locale actually ran without asking the reporter to check.
@@ -19,6 +29,8 @@ foreach ($EnvLine in (Get-EnvironmentReport -WorkRoot $WorkRoot)) {
     if ($EnvLine.Color -eq 'Gray') { Write-HostTimestamp $EnvText }
     else { Write-HostTimestamp $EnvText -ForegroundColor $EnvLine.Color }
 }
+$VersionCheckResult = if ($VersionCheck) { Receive-VersionCheck -Check $VersionCheck } else { [pscustomobject]@{ Status = 'Skipped' } }
+Write-VersionCheckResult -Result $VersionCheckResult
 if ($ServiceWinRE) {
     Write-HostTimestamp '-ServiceWinRE is deprecated and does nothing. The recovery image is serviced by default now, so pass -SkipWinRE to turn it off.' -ForegroundColor Yellow
 }
@@ -28,7 +40,7 @@ if ($Server) {
 if ($RecoveryIsoOnly) {
     if ($CheckOnly) {
         Write-HostTimestamp '-CheckOnly cannot be combined with -RecoveryIsoOnly, which keeps no build stamps to compare against.' -ForegroundColor Red
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
     $RecoveryIgnored = @('Edition', 'KeepEditions', 'KeepAllEditions', 'UpdatePath', 'SkipDotNet', 'SkipSetupDU', 'BaselineOnly',
@@ -65,10 +77,10 @@ if ($UnregisterScheduledTask) {
     }
     catch {
         Write-HostTimestamp "Could not remove the scheduled task '$TaskName': $($_.Exception.Message)" -ForegroundColor Red
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
-    Stop-Transcript | Out-Null
+    Stop-RunLogging | Out-Null
     exit 0
 }
 
@@ -78,11 +90,11 @@ if ($RegisterScheduledTask) {
     }
     catch {
         Write-HostTimestamp "Could not register the scheduled task: $($_.Exception.Message)" -ForegroundColor Red
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
     Write-Host $LineBreak
-    Stop-Transcript | Out-Null
+    Stop-RunLogging | Out-Null
     exit 0
 }
 
@@ -103,7 +115,7 @@ foreach ($Dir in @($WorkRoot, $DlDir)) {
     }
     catch {
         Write-HostTimestamp "Could not create the folder '$Dir': $($_.Exception.Message). Cannot continue." -ForegroundColor Red
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
 }
@@ -128,7 +140,7 @@ Write-HostLog "  Working folder   : $WorkRoot"
 Write-HostLog "    Extracted media: $ExtractDir"
 Write-HostLog "    DISM mount     : $MountDir"
 Write-HostLog "  Downloads        : $DlDir"
-if (-not $IsoPath) { Write-HostLog '                     (drop your own .iso here and it is used instead of downloading one)' -ForegroundColor DarkGray }
+if (-not $IsoPath) { Write-HostLog '                     (drop your own .iso here and it is used instead of downloading one)' }
 Write-HostLog "  Logs             : $LogDir"
 if (-not $NoStamp) { Write-HostLog "  Build stamps     : $StampRoot" }
 # Nothing has read the image yet, so only the parts settled before then are filled in. Only a client download
@@ -138,8 +150,8 @@ $IsoNameBase = "$($IsoNameRelease)_<edition>_<arch>_<language>_<build>.<UBR>_<da
 $IsoNameExample = "$IsoNamePrefix$IsoNameBase$IsoNameSuffix.iso"
 Write-HostLog "  Finished ISO     : $(if ($OutputIsoPath) { $OutputIsoPath } else { Join-Path $FinishedIsoDir $IsoNameExample })"
 Write-Host ''
-Write-HostLog '  Nothing outside these folders is changed. -WorkPath moves all of it, and -DownloadPath, -LogPath' -ForegroundColor DarkGray
-Write-HostLog '  and -OutputIsoPath override the individual folders.' -ForegroundColor DarkGray
+Write-HostLog '  Nothing outside these folders is changed. -WorkPath moves all of it, and -DownloadPath, -LogPath'
+Write-HostLog '  and -OutputIsoPath override the individual folders.'
 Write-Host $LineBreak
 
 #endregion
@@ -159,7 +171,7 @@ catch [System.Threading.AbandonedMutexException] { $HaveRunMutex = $true }
 if (-not $HaveRunMutex) {
     Write-HostTimestamp "Another Windows-ISO-Updater run is already using $WorkRoot." -ForegroundColor Red
     Write-HostTimestamp '  Wait for it to finish, or start this one with a different -WorkPath so the two do not share a mount folder.' -ForegroundColor Red
-    Stop-Transcript | Out-Null
+    Stop-RunLogging | Out-Null
     exit 1
 }
 
@@ -192,7 +204,7 @@ if ($StaleStages.Count -gt 0) {
         }
     }
     if ($StageRemoved -gt 0) {
-        Write-HostTimestamp ('Removed {0} staging folder(s) left behind by an interrupted run, freeing {1:N0} MB.' -f $StageRemoved, $StageFreedMB) -ForegroundColor DarkGray
+        Write-HostTimestamp ('Removed {0} staging folder(s) left behind by an interrupted run, freeing {1:N0} MB.' -f $StageRemoved, $StageFreedMB)
         Write-Host $LineBreak
     }
 }
@@ -203,7 +215,7 @@ foreach ($StaleIso in @(Get-ChildItem -LiteralPath $IsoStageDir -Filter '*.iso' 
     try {
         $StaleSizeMB = $StaleIso.Length / 1MB
         Remove-Item -LiteralPath $StaleIso.FullName -Force -ErrorAction Stop
-        Write-HostTimestamp ('Removed a staged ISO left behind by an interrupted run: {0} ({1:N0} MB).' -f $StaleIso.Name, $StaleSizeMB) -ForegroundColor DarkGray
+        Write-HostTimestamp ('Removed a staged ISO left behind by an interrupted run: {0} ({1:N0} MB).' -f $StaleIso.Name, $StaleSizeMB)
         Write-Host $LineBreak
     }
     catch {
@@ -234,7 +246,7 @@ foreach ($StaleName in @('Mount', 'WinREMount', 'BuildCheck')) {
     }
     catch {
         Write-HostTimestamp "  $($_.Exception.Message)" -ForegroundColor Red
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
 }
@@ -247,7 +259,7 @@ if ($MountsCleared) { Write-Host $LineBreak }
 if (Test-RemotePath -Path $WorkRoot) {
     Write-HostTimestamp "The working folder is not on a local disk: $WorkRoot" -ForegroundColor Red
     Write-HostTimestamp '  A UNC path, a mapped network drive, or a drive letter that does not exist in this session cannot be used to mount and service images. Point -WorkPath at a local drive with plenty of free space.' -ForegroundColor Red
-    Stop-Transcript | Out-Null
+    Stop-RunLogging | Out-Null
     exit 1
 }
 
@@ -268,7 +280,7 @@ else {
         }
         else {
             Write-HostTimestamp "CRITICAL: Less than $RequiredGB GB free on the working drive. Building a patched ISO needs a lot of scratch space. Free up space, choose another drive with -WorkPath, and try again." -ForegroundColor Red
-            Stop-Transcript | Out-Null
+            Stop-RunLogging | Out-Null
             exit 1
         }
     }
@@ -288,7 +300,7 @@ if (-not $ListEditions -and -not $CheckOnly -and -not $RecoveryIsoOnly) {
         Write-HostTimestamp 'The finished ISO could not be written where it is meant to go.' -ForegroundColor Red
         Write-HostTimestamp "  $OutputProblem" -ForegroundColor Red
         Write-HostTimestamp '  Fix the destination or point -OutputIsoPath somewhere else, then run again.' -ForegroundColor Red
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
     if ($OutputIsoPath) {
@@ -307,7 +319,7 @@ if (-not $ListEditions -and -not $CheckOnly -and -not $RecoveryIsoOnly) {
     $OutputIsRemote = Test-RemotePath -Path $OutputDir
     if ($OutputIsRemote) {
         Write-HostTimestamp '  That is a network location. Drive mappings belong to a logon session, so a scheduled run may not see it. A UNC path is the safer choice.' -ForegroundColor Yellow
-        Write-HostTimestamp "  The ISO will be built in $IsoStageDir and copied there once it is finished, so a share that stalls cannot cost the whole build." -ForegroundColor DarkGray
+        Write-HostTimestamp "  The ISO will be built in $IsoStageDir and copied there once it is finished, so a share that stalls cannot cost the whole build."
     }
     # Only worth saying when the ISO lands somewhere other than the working drive, which was measured above.
     $OutputQualifier = try { Split-Path -Path $OutputDir -Qualifier -ErrorAction SilentlyContinue } catch { $null }
@@ -326,7 +338,7 @@ if ($RecoveryIsoDir -and -not $ListEditions -and -not $CheckOnly) {
         Write-HostTimestamp 'The recovery ISO could not be written where it is meant to go.' -ForegroundColor Red
         Write-HostTimestamp "  $RecoveryProblem" -ForegroundColor Red
         Write-HostTimestamp '  Fix the destination or point -RecoveryIsoPath somewhere else, then run again.' -ForegroundColor Red
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
     Write-HostTimestamp "Recovery ISO   : $(if ($RecoveryIsoFile) { $RecoveryIsoFile } else { "$RecoveryIsoDir (generated name)" })" -ForegroundColor Green
@@ -341,7 +353,7 @@ $UnattendText = $null
 if ($UnattendPath) {
     if (-not (Test-Path -LiteralPath $UnattendPath -PathType Leaf)) {
         Write-HostTimestamp "The answer file '$UnattendPath' does not exist. Cannot continue." -ForegroundColor Red
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
     $ResolvedUnattend = (Resolve-Path -LiteralPath $UnattendPath).Path
@@ -352,7 +364,7 @@ if ($UnattendPath) {
     }
     catch {
         Write-HostTimestamp "The answer file '$ResolvedUnattend' is not valid XML: $($_.Exception.Message). Cannot continue." -ForegroundColor Red
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
     $UnattendText = $UnattendDoc.OuterXml
@@ -376,7 +388,7 @@ $ResolvedDriverPath = $null
 if ($DriverPath) {
     if (-not (Test-Path -LiteralPath $DriverPath -PathType Container)) {
         Write-HostTimestamp "The driver folder '$DriverPath' does not exist. Cannot continue." -ForegroundColor Red
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
     $ResolvedDriverPath = (Resolve-Path -LiteralPath $DriverPath).Path
@@ -384,7 +396,7 @@ if ($DriverPath) {
             Sort-Object -Property FullName)
     if ($script:DriverInfFiles.Count -eq 0) {
         Write-HostTimestamp "No .inf files were found anywhere under '$ResolvedDriverPath'. Extract the vendor's driver package first - an .exe or .msi installer cannot be injected into an image." -ForegroundColor Red
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
     # Hashed for the build stamp: dropping a newer driver in has to force a rebuild even though the path
@@ -411,7 +423,7 @@ $ResolvedExtraFiles = $null
 if ($ExtraFilesPath) {
     if (-not (Test-Path -LiteralPath $ExtraFilesPath -PathType Container)) {
         Write-HostTimestamp "The extra files folder '$ExtraFilesPath' does not exist. Cannot continue." -ForegroundColor Red
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
     $ResolvedExtraFiles = (Resolve-Path -LiteralPath $ExtraFilesPath).Path
@@ -420,7 +432,7 @@ if ($ExtraFilesPath) {
     $script:ExtraFileRecords = @(Get-FolderFileRecords -Path $ResolvedExtraFiles)
     if ($script:ExtraFileRecords.Count -eq 0) {
         Write-HostTimestamp "The extra files folder '$ResolvedExtraFiles' is empty. Cannot continue." -ForegroundColor Red
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
     $script:ExtraFilesHash = Get-FolderContentHash -Records $script:ExtraFileRecords

@@ -215,12 +215,12 @@ function Register-UpdaterScheduledTask {
 
     $PrincipalUser = if ($TaskUsername) { $TaskUsername } else { 'SYSTEM' }
     Write-HostTimestamp "Scheduled task '$TaskName' registered: runs $When as $PrincipalUser." -ForegroundColor Green
-    Write-HostTimestamp "  Command: `"$Exe`" $ArgumentString" -ForegroundColor DarkGray
+    Write-HostTimestamp "  Command: `"$Exe`" $ArgumentString"
     if (-not $TaskUsername) {
         Write-HostTimestamp '  It runs as SYSTEM, so every path it uses must be a local path SYSTEM can reach (not a mapped drive or a cloud-synced user folder).' -ForegroundColor Yellow
     }
-    Write-HostTimestamp "  Each run compares the build stamp in $StampRoot and exits in a minute or two when nothing has changed." -ForegroundColor DarkGray
-    Write-HostTimestamp "  Remove it again with: -UnregisterScheduledTask -TaskName `"$TaskName`"" -ForegroundColor DarkGray
+    Write-HostTimestamp "  Each run compares the build stamp in $StampRoot and exits in a minute or two when nothing has changed."
+    Write-HostTimestamp "  Remove it again with: -UnregisterScheduledTask -TaskName `"$TaskName`""
 }
 #endregion
 

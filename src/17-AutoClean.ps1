@@ -41,11 +41,11 @@ function Invoke-AutoClean {
             Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
             $RemovedUpdates++
             $FreedMB += $SizeMB
-            Write-HostTimestamp ('  Deleted superseded update: {0} ({1:N0} MB)' -f $Name, $SizeMB) -ForegroundColor DarkGray
+            Write-HostTimestamp ('  Deleted superseded update: {0} ({1:N0} MB)' -f $Name, $SizeMB)
         }
         catch { Write-HostTimestamp "  Could not delete '$Name': $($_.Exception.Message)" -ForegroundColor Yellow }
     }
-    if ($RemovedUpdates -eq 0) { Write-HostTimestamp '  No superseded update packages to remove.' -ForegroundColor DarkGray }
+    if ($RemovedUpdates -eq 0) { Write-HostTimestamp '  No superseded update packages to remove.' }
 
     # 2. Generated ISOs: keep the newest -KeepIsoCount, delete the rest. Candidates are the ISOs named in
     #    the stamps plus any still sitting in the output folder under this script's generated name pattern
@@ -70,16 +70,16 @@ function Invoke-AutoClean {
     }
 
     if ($Candidates.Count -gt 0) {
-        Write-HostTimestamp "AutoClean candidates ($($Candidates.Count)):" -ForegroundColor DarkGray
+        Write-HostTimestamp "AutoClean candidates ($($Candidates.Count)):"
         foreach ($Candidate in $Candidates.Values) {
-            Write-HostTimestamp "  $($Candidate.FullName)" -ForegroundColor DarkGray
+            Write-HostTimestamp "  $($Candidate.FullName)"
         }
     }
 
     $Ordered = @($Candidates.Values | Sort-Object -Property LastWriteTime -Descending)
     $Stale = @($Ordered | Select-Object -Skip $KeepIsoCount | Where-Object { $ProtectedPaths -notcontains $_.FullName.ToLowerInvariant() })
     if ($Ordered.Count -gt 0) {
-        Write-HostTimestamp "  Found $($Ordered.Count) generated ISO(s), keeping the newest $KeepIsoCount." -ForegroundColor DarkGray
+        Write-HostTimestamp "  Found $($Ordered.Count) generated ISO(s), keeping the newest $KeepIsoCount."
     }
     $RemovedIsos = 0
     foreach ($Item in $Stale) {
@@ -88,11 +88,11 @@ function Invoke-AutoClean {
             Remove-Item -LiteralPath $Item.FullName -Force -ErrorAction Stop
             $RemovedIsos++
             $FreedMB += $SizeMB
-            Write-HostTimestamp ('  Deleted old ISO: {0} ({1:N0} MB)' -f $Item.Name, $SizeMB) -ForegroundColor DarkGray
+            Write-HostTimestamp ('  Deleted old ISO: {0} ({1:N0} MB)' -f $Item.Name, $SizeMB)
         }
         catch { Write-HostTimestamp "  Could not delete '$($Item.FullName)': $($_.Exception.Message)" -ForegroundColor Yellow }
     }
-    if ($RemovedIsos -eq 0) { Write-HostTimestamp '  No old ISOs to remove.' -ForegroundColor DarkGray }
+    if ($RemovedIsos -eq 0) { Write-HostTimestamp '  No old ISOs to remove.' }
 
     # 3. Locally cached source ISOs: a copy this script made of a remote/cloud -IsoPath under $DlDir, using
     #    the source's own file name. A stamp only records a RemoteOrigin when that happened, so an ISO the
@@ -127,11 +127,11 @@ function Invoke-AutoClean {
             Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
             $RemovedSourceIsos++
             $FreedMB += $SizeMB
-            Write-HostTimestamp ('  Deleted stale cached source ISO: {0} ({1:N0} MB)' -f $FileName, $SizeMB) -ForegroundColor DarkGray
+            Write-HostTimestamp ('  Deleted stale cached source ISO: {0} ({1:N0} MB)' -f $FileName, $SizeMB)
         }
         catch { Write-HostTimestamp "  Could not delete '$FileName': $($_.Exception.Message)" -ForegroundColor Yellow }
     }
-    if ($RemovedSourceIsos -eq 0) { Write-HostTimestamp '  No stale cached source ISOs to remove.' -ForegroundColor DarkGray }
+    if ($RemovedSourceIsos -eq 0) { Write-HostTimestamp '  No stale cached source ISOs to remove.' }
 
     # 4. Recovery ISOs, counted on their own so they never take an installation ISO's -KeepIsoCount slot.
     $RemovedRecoveryIsos = 0

@@ -1,6 +1,6 @@
 # GENERATED FILE. Edit the files in src\ and run tools\Build-Script.ps1, because changes made here are overwritten.
 # Windows ISO Updater
-# Version: 2026.11.22.1   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
+# Version: 2026.11.22.2   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
 #
 #region Script overview
 # This script builds a fully up-to-date ("slipstreamed") Windows 11, Windows 10 or Windows Server
@@ -305,7 +305,10 @@ param(
     [Parameter(HelpMessage = 'Ask for the -TaskUsername password at startup without echoing it. Added automatically when the script relaunches itself elevated, so the password never appears on a command line')]
     [switch]$PromptTaskPassword,
 
-    [switch]$SkipInteractive # Skips the interactive confirmation prompt
+    [switch]$SkipInteractive, # Skips the interactive confirmation prompt
+
+    [Parameter(HelpMessage = 'Skip checking GitHub for a newer release of this script at startup. The check waits a few seconds at most, and when GitHub cannot be reached it is noted only in the log')]
+    [switch]$SkipVersionCheck
 )
 #endregion
 
@@ -317,7 +320,7 @@ $script:ScriptPath = $PSCommandPath
 
 # Kept in step with the header comment by tools\Update-Version.ps1, and shown in the log and recorded in
 # the build stamp so a finished ISO can be traced back to the exact script that built it.
-$ScriptVersion = '2026.11.22.1'
+$ScriptVersion = '2026.11.22.2'
 
 # A scheduled run has nobody to answer a prompt.
 if ($Scheduled) {
@@ -488,7 +491,9 @@ if ($PromptTaskPassword -and -not $TaskPassword) {
 }
 
 # Add a Window Title
-$Host.UI.RawUI.WindowTitle = "Windows ISO Updater - Running as Administrator - $env:COMPUTERNAME"
+# Kept so the title can name the current step and its progress in front of it (see Set-ConsoleTitle).
+$script:BaseWindowTitle = "Windows ISO Updater - Running as Administrator - $env:COMPUTERNAME"
+try { $Host.UI.RawUI.WindowTitle = $script:BaseWindowTitle } catch { }
 
 #endregion
 
@@ -678,8 +683,10 @@ $script:EffectiveServer = [bool]$Server
 #region Functions
 
 #region Output and timing helpers
+# The console shows only the time, because the run header gives the date and the .log records both on every line.
 function Get-TimeStamp {
-    return (Get-Date -Format '[MM/dd/yyyy|HH:mm:ss]')
+    param([datetime]$Date = (Get-Date))
+    return $Date.ToString('[HH:mm:ss]', [System.Globalization.CultureInfo]::InvariantCulture)
 }
 
 function Get-FriendlyDate {
@@ -747,6 +754,205 @@ function Get-ConsoleWidth {
     catch { return 0 }
 }
 
+# The characters the console output is drawn with, chosen once per run. Write-Host reaches the console through
+# its Unicode API, so any character arrives intact, but the font of a classic console window may not carry it,
+# and [Console]::Write (the progress line) goes through the console's code page, which turns anything outside it
+# into '?'. So there are three sets:
+# - Unicode: Windows Terminal, the VS Code terminal, or a UTF-8 console, whose fonts carry check marks and
+#   rounded corners.
+# - Oem: a classic console on code page 437, 850 or 858, which all have box drawing, blocks and a square root sign.
+# - Ascii: every other code page, and always when output is redirected or the run is scheduled, so a file or a
+#   transcript read somewhere else never holds a character it cannot show.
+# The .log never gets any of them, and the transcript only ever holds what the console showed. The characters are
+# written as [char] codes because the script itself stays ASCII, which Windows PowerShell 5.1 reads correctly
+# whatever its encoding.
+function Get-ConsoleStyleSet {
+    param(
+        [bool]$Redirected,
+        [int]$CodePage,
+        [bool]$WindowsTerminal,
+        [bool]$VsCode,
+        [bool]$Scheduled,
+        [bool]$VirtualTerminal
+    )
+    $Kind =
+        if ($Redirected -or $Scheduled) { 'Ascii' }
+        elseif ($WindowsTerminal -or $VsCode -or $CodePage -eq 65001) { 'Unicode' }
+        elseif ($CodePage -in 437, 850, 858) { 'Oem' }
+        else { 'Ascii' }
+    $Style = switch ($Kind) {
+        'Unicode' {
+            @{ Ok = [string][char]0x2713; Warn = '!'; Error = [string][char]0x2717; Rule = [string][char]0x2500; Side = [string][char]0x2502
+                TopLeft = [string][char]0x256D; TopRight = [string][char]0x256E; BottomLeft = [string][char]0x2570; BottomRight = [string][char]0x256F }
+        }
+        'Oem' {
+            @{ Ok = [string][char]0x221A; Warn = '!'; Error = 'x'; Rule = [string][char]0x2500; Side = [string][char]0x2502
+                TopLeft = [string][char]0x250C; TopRight = [string][char]0x2510; BottomLeft = [string][char]0x2514; BottomRight = [string][char]0x2518 }
+        }
+        default {
+            @{ Ok = '+'; Warn = '!'; Error = 'x'; Rule = '-'; Side = '|'; TopLeft = '+'; TopRight = '+'; BottomLeft = '+'; BottomRight = '+' }
+        }
+    }
+    $Style.Kind = $Kind
+    # The bar goes through the code page, so its blocks have to exist in the code page itself, even in Windows Terminal.
+    $Blocks = $Kind -ne 'Ascii' -and $CodePage -in 437, 850, 858, 65001
+    $Style.BarFill = if ($Blocks) { [string][char]0x2588 } else { '#' }
+    $Style.BarEmpty = if ($Blocks) { [string][char]0x2591 } else { '-' }
+    # Windows Terminal fills the tab and the taskbar button from an escape sequence. Anywhere else it would print.
+    $Style.TaskbarProgress = (-not $Redirected) -and (-not $Scheduled) -and $WindowsTerminal -and $VirtualTerminal
+    return $Style
+}
+
+function Get-ConsoleStyle {
+    if (-not $script:ConsoleStyle) {
+        $Redirected = $true
+        $CodePage = 0
+        try {
+            $Redirected = [Console]::IsOutputRedirected
+            $CodePage = [Console]::OutputEncoding.CodePage
+        }
+        catch { }
+        $Vt = try { [bool]$Host.UI.SupportsVirtualTerminal } catch { $false }
+        $script:ConsoleStyle = Get-ConsoleStyleSet -Redirected $Redirected -CodePage $CodePage -WindowsTerminal ([bool]$env:WT_SESSION) -VsCode ($env:TERM_PROGRAM -eq 'vscode') -Scheduled ([bool]$Scheduled) -VirtualTerminal $Vt
+    }
+    return $script:ConsoleStyle
+}
+
+# The window title names the step and its percentage, so a build can be followed from the taskbar.
+function Set-ConsoleTitle {
+    param(
+        [string]$Step,
+        [int]$Percent = -1
+    )
+    if (-not $script:BaseWindowTitle) { return }
+    $Parts = @()
+    if ($Percent -ge 0) { $Parts += "$Percent%" }
+    if ($Step) { $Parts += $Step.TrimEnd('.') }
+    $Parts += $script:BaseWindowTitle
+    try { $Host.UI.RawUI.WindowTitle = $Parts -join ' - ' } catch { }
+}
+
+# Windows Terminal's tab and taskbar progress (OSC 9;4): a percentage, a busy state for -1, or nothing with -Clear.
+# Written straight to the console, so the sequence never reaches the transcript, and ended with ST rather than
+# BEL, which a terminal that does not know the sequence could ring.
+function Set-TaskbarProgress {
+    param(
+        [int]$Percent = -1,
+        [switch]$Clear
+    )
+    if (-not (Get-ConsoleStyle).TaskbarProgress) { return }
+    $Esc = [char]27
+    $Code =
+        if ($Clear) { '0;0' }
+        elseif ($Percent -lt 0) { '3;0' }
+        else { "1;$([math]::Min(100, $Percent))" }
+    try { [Console]::Write("$Esc]9;4;$Code$Esc\") } catch { }
+}
+
+# A step's heading: the description followed by a rule out to the console's edge, less the column a console wraps
+# on (see Format-ProgressLine). $PrefixLength is what goes in front of it on the line, the timestamp and symbol.
+function Format-StepHeader {
+    param(
+        [string]$Text,
+        [int]$Width,
+        [string]$Rule = '-',
+        [int]$PrefixLength = 0
+    )
+    $Fill = if ($Width -gt 0) { $Width - 1 - $PrefixLength - $Text.Length - 1 } else { 3 }
+    if ($Fill -lt 3) { return $Text }
+    return "$Text " + ($Rule * $Fill)
+}
+
+# The finished run's summary in a box, as lines. A box wider than the console would wrap and fall apart, so then
+# the rows are listed without one.
+function Format-SummaryBox {
+    param(
+        [string]$Title,
+        [System.Collections.Specialized.OrderedDictionary]$Rows,
+        [int]$Width,
+        [hashtable]$Style
+    )
+    $LabelWidth = (@($Rows.Keys) | ForEach-Object { "$_".Length } | Measure-Object -Maximum).Maximum
+    $Body = @(foreach ($Key in $Rows.Keys) { "{0,-$LabelWidth}   {1}" -f $Key, $Rows[$Key] })
+    $Inner = [math]::Max((($Body | ForEach-Object { $_.Length } | Measure-Object -Maximum).Maximum), $Title.Length + 2)
+    if ($Width -gt 0 -and $Inner + 4 -gt $Width - 1) {
+        return @($Title) + @($Body | ForEach-Object { "  $_" })
+    }
+    $Lines = [System.Collections.Generic.List[string]]::new()
+    $Lines.Add($Style.TopLeft + $Style.Rule + " $Title " + ($Style.Rule * ($Inner - $Title.Length - 1)) + $Style.TopRight)
+    foreach ($Line in $Body) { $Lines.Add($Style.Side + ' ' + $Line.PadRight($Inner) + ' ' + $Style.Side) }
+    $Lines.Add($Style.BottomLeft + ($Style.Rule * ($Inner + 2)) + $Style.BottomRight)
+    return $Lines.ToArray()
+}
+
+# The box goes to the console, and the .log gets the same rows as plain lines.
+function Write-SummaryBox {
+    param(
+        [string]$Title,
+        [System.Collections.Specialized.OrderedDictionary]$Rows,
+        [consolecolor]$ForegroundColor = 'Green'
+    )
+    foreach ($Line in (Format-SummaryBox -Title $Title -Rows $Rows -Width (Get-ConsoleWidth) -Style (Get-ConsoleStyle))) {
+        Write-Host $Line -ForegroundColor $ForegroundColor
+    }
+    Write-CMTraceLog -Message $Title
+    foreach ($Key in $Rows.Keys) { Write-CMTraceLog -Message "  ${Key}: $($Rows[$Key])" }
+}
+
+# Flashes the console window's taskbar button until the window is next in front. Compiled only when a run needs it.
+function Invoke-ConsoleFlash {
+    try {
+        if (-not ('WisoConsoleFlash' -as [type])) {
+            Add-Type -ErrorAction Stop -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class WisoConsoleFlash {
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FLASHWINFO { public uint cbSize; public IntPtr hwnd; public uint dwFlags; public uint uCount; public uint dwTimeout; }
+    [DllImport("kernel32.dll")] private static extern IntPtr GetConsoleWindow();
+    [DllImport("user32.dll")] private static extern bool FlashWindowEx(ref FLASHWINFO info);
+    public static void Flash() {
+        IntPtr Window = GetConsoleWindow();
+        if (Window == IntPtr.Zero) { return; }
+        FLASHWINFO Info = new FLASHWINFO();
+        Info.cbSize = (uint)Marshal.SizeOf(typeof(FLASHWINFO));
+        Info.hwnd = Window;
+        Info.dwFlags = 2 | 12;   // FLASHW_TRAY | FLASHW_TIMERNOFG: the taskbar button, until the window is in front
+        FlashWindowEx(ref Info);
+    }
+}
+'@
+        }
+        [WisoConsoleFlash]::Flash()
+    }
+    catch { }   # a missing compiler or an unusual host is no reason for the end of a build to fail
+}
+
+# Run once as the run ends, however it ends: clears the taskbar progress, says in the title how it went, and for a
+# run someone started by hand that took a minute or more, sounds the console bell and flashes the taskbar button,
+# because they have probably switched to another window. A scheduled or unattended run has nobody to hear it.
+function Complete-ConsoleRun {
+    param([switch]$Failed)
+    if ($script:ConsoleRunCompleted) { return }
+    $script:ConsoleRunCompleted = $true
+    Set-TaskbarProgress -Clear
+    Set-ConsoleTitle -Step $(if ($Failed) { 'Stopped' } else { 'Finished' })
+    if ($Unattended -or $Scheduled) { return }
+    if (-not $script:ScriptStartTime -or ((Get-Date) - $script:ScriptStartTime).TotalSeconds -lt 60) { return }
+    try {
+        if ([Console]::IsOutputRedirected) { return }
+        [Console]::Write([string][char]7)
+    }
+    catch { return }
+    Invoke-ConsoleFlash
+}
+
+# Every exit goes through here, so the console is finished with before the transcript stops.
+function Stop-RunLogging {
+    Complete-ConsoleRun -Failed:([bool]$script:ConsoleSawError)
+    Stop-Transcript
+}
+
 # The console cuts a long line at its edge, mid-word, and carries on at column 0. This breaks it between
 # words instead, and starts each continuation $Indent columns in, so it lines up under the message rather
 # than under the timestamp. A path has no spaces, so it breaks after a separator, and a word is only cut
@@ -796,7 +1002,9 @@ function Format-ProgressLine {
         [int]$Percent,
         [string]$Detail,
         [int]$Width,
-        [int]$Indent = 0
+        [int]$Indent = 0,
+        [string]$Fill = '#',
+        [string]$Empty = '-'
     )
     if ($Percent -lt 0) {
         if ($Indent + $Detail.Length -gt $Width - 1) { $Indent = 0 }
@@ -813,7 +1021,7 @@ function Format-ProgressLine {
         $BarWidth = [math]::Max(0, $Width - 1 - $Tail.Length - 2)
     }
     $Filled = [int][math]::Floor($BarWidth * $Percent / 100)
-    $Line = (' ' * $Indent) + '[' + ('#' * $Filled) + ('-' * ($BarWidth - $Filled)) + ']' + $Tail
+    $Line = (' ' * $Indent) + '[' + ($Fill * $Filled) + ($Empty * ($BarWidth - $Filled)) + ']' + $Tail
     # A detail too long for a narrow console is cut rather than allowed to wrap.
     if ($Line.Length -gt $Width - 1) { $Line = $Line.Substring(0, [math]::Max(0, $Width - 1)) }
     return $Line
@@ -850,13 +1058,20 @@ function Update-ProgressLine {
     if ($State.Width -le 0) { return }
     if (-not $Detail) { $Detail = Format-Duration ((Get-Date) - $State.Start) }
     try {
-        $Line = Format-ProgressLine -Percent $Percent -Detail $Detail -Width $State.Width -Indent $State.Indent
+        $Style = Get-ConsoleStyle
+        $Line = Format-ProgressLine -Percent $Percent -Detail $Detail -Width $State.Width -Indent $State.Indent -Fill $Style.BarFill -Empty $Style.BarEmpty
         # Padded out to the last line drawn, so a shorter redraw does not leave the end of the old one behind.
         [Console]::Write("`r" + $Line.PadRight([int]$State.Length))
         $State.Length = $Line.Length
         $State.Drawn = $true
     }
-    catch { $State.Width = 0 }   # a host without a real console, so stop trying
+    catch { $State.Width = 0; return }   # a host without a real console, so stop trying
+    # The title and the taskbar change only with the percentage, not with every redraw of the detail.
+    if ($Percent -ne $State.Shown) {
+        $State.Shown = $Percent
+        Set-TaskbarProgress -Percent $Percent
+        Set-ConsoleTitle -Step $script:CurrentStep -Percent $Percent
+    }
 }
 
 function Clear-ProgressLine {
@@ -864,21 +1079,56 @@ function Clear-ProgressLine {
     if (-not $State.Drawn) { return }
     try { [Console]::Write("`r" + (' ' * ($State.Width - 1)) + "`r") } catch { }
     $State.Drawn = $false
+    $State.Shown = $null
+    Set-TaskbarProgress -Clear
+    Set-ConsoleTitle -Step $script:CurrentStep
+}
+
+# The symbol in front of a message, from the line's color: green succeeded, yellow is a warning and red an error.
+# Every other line gets a blank in its place, so messages at the same depth start in the same column.
+function Get-ConsoleSymbol {
+    param(
+        [string]$Color,
+        [hashtable]$Style
+    )
+    switch -Regex ($Color) {
+        '^(Dark)?Green$'  { return $Style.Ok }
+        '^(Dark)?Yellow$' { return $Style.Warn }
+        '^(Dark)?Red$'    { return $Style.Error }
+        default           { return ' ' }
+    }
 }
 
 function Write-HostTimestamp {
     param (
         [string]$Message,
-        [consolecolor]$ForegroundColor = $(try { ((Get-Host).ui.rawui.ForegroundColor) } catch { 'White' })
+        [consolecolor]$ForegroundColor = $(try { ((Get-Host).ui.rawui.ForegroundColor) } catch { 'White' }),
+        # Replaces the symbol the color would pick. A step heading uses it for its rule.
+        [string]$Symbol,
+        # What the .log gets, when it should not be the console text.
+        [string]$LogMessage
     )
 
+    $Style = Get-ConsoleStyle
+    # The stamp has no date, so a run that goes past midnight says once that the day has changed.
+    $Now = Get-Date
+    if ($script:ConsoleDate -and $script:ConsoleDate -ne $Now.Date) {
+        Write-Host "$(Get-TimeStamp -Date $Now)   The date is now $(Get-FriendlyDate -Date $Now)."
+    }
+    $script:ConsoleDate = $Now.Date
+    if ("$ForegroundColor" -match '^(Dark)?Red$') { $script:ConsoleSawError = $true }
+
     # The console copy is wrapped to fit the window. The CMTrace log gets the message whole, on one line.
-    $Stamp = Get-TimeStamp
-    $Indent = $Stamp.Length + 1 + ($Message.Length - $Message.TrimStart().Length)
-    foreach ($Part in (Format-WrappedText -Text "$Stamp $Message" -Width (Get-ConsoleWidth) -Indent $Indent)) {
+    if (-not $PSBoundParameters.ContainsKey('Symbol')) { $Symbol = Get-ConsoleSymbol -Color "$ForegroundColor" -Style $Style }
+    # The symbol goes just before the text, after the message's own indent, so it stays beside what it marks.
+    $Lead = $Message.Length - $Message.TrimStart().Length
+    $Line = "$(Get-TimeStamp -Date $Now) " + $Message.Substring(0, $Lead) + "$Symbol " + $Message.TrimStart()
+    $Indent = (Get-TimeStamp -Date $Now).Length + 1 + $Lead + 2
+    foreach ($Part in (Format-WrappedText -Text $Line -Width (Get-ConsoleWidth) -Indent $Indent)) {
         Write-Host $Part -ForegroundColor $ForegroundColor
     }
-    Write-CMTraceLog -Message $Message -Type (Get-LogSeverity -Color "$ForegroundColor") -Line $MyInvocation.ScriptLineNumber
+    if (-not $PSBoundParameters.ContainsKey('LogMessage')) { $LogMessage = $Message }
+    Write-CMTraceLog -Message $LogMessage -Type (Get-LogSeverity -Color "$ForegroundColor") -Line $MyInvocation.ScriptLineNumber
 }
 
 # Red and Yellow already mean fatal and warning throughout this script, so CMTrace's severity comes free.
@@ -915,8 +1165,14 @@ function Invoke-Task {
 
     # Naming the component after the step is what makes CMTrace's filter useful on a log this long.
     $PreviousComponent = $script:LogComponent
+    $PreviousStep = $script:CurrentStep
     $script:LogComponent = $Description
-    Write-HostTimestamp $Description
+    $script:CurrentStep = $Description
+    # A heading in cyan with a rule out to the edge, so each step stands out from the long stretches of DISM output.
+    $Style = Get-ConsoleStyle
+    $Heading = Format-StepHeader -Text $Description -Width (Get-ConsoleWidth) -Rule $Style.Rule -PrefixLength ((Get-TimeStamp).Length + 3)
+    Write-HostTimestamp $Heading -ForegroundColor Cyan -Symbol $Style.Rule -LogMessage $Description
+    Set-ConsoleTitle -Step $Description
     $StepStart = Get-Date
     try {
         & $ScriptBlock
@@ -930,8 +1186,10 @@ function Invoke-Task {
         # Recorded in a finally block so a step that throws still contributes to the timing summary.
         $Elapsed = (Get-Date) - $StepStart
         $script:StepTimings.Add([pscustomobject]@{ Description = $Description; Duration = $Elapsed })
-        Write-HostTimestamp "  Step finished in $(Format-Duration $Elapsed)." -ForegroundColor DarkGray
+        Write-HostTimestamp "  Step finished in $(Format-Duration $Elapsed)."
         $script:LogComponent = $PreviousComponent
+        $script:CurrentStep = $PreviousStep
+        Set-ConsoleTitle -Step $PreviousStep
     }
     Write-Host $LineBreak
 }
@@ -1125,7 +1383,7 @@ function Copy-LargeFile {
     }
     $Elapsed = (Get-Date) - $Started
     $SpeedMB = if ($Elapsed.TotalSeconds -gt 0) { ($SourceLength / 1MB) / $Elapsed.TotalSeconds } else { 0 }
-    Write-HostTimestamp ('  Copied {0:N2} GB in {1} ({2:N0} MB/s).' -f ($SourceLength / 1GB), (Format-Duration $Elapsed), $SpeedMB) -ForegroundColor DarkGray
+    Write-HostTimestamp ('  Copied {0:N2} GB in {1} ({2:N0} MB/s).' -f ($SourceLength / 1GB), (Format-Duration $Elapsed), $SpeedMB)
 }
 
 # Whether BITS can transfer anything for this logon session. BITS only moves a job while its owner is logged
@@ -1158,7 +1416,7 @@ function Get-FileDownload {
     $UseBits = [bool](Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue)
     if ($UseBits -and -not (Test-BitsUsable)) {
         $UseBits = $false
-        Write-HostTimestamp '  BITS only runs for a signed-in user, and this run is a scheduled task for a user who is not signed in, so the file is downloaded directly.' -ForegroundColor DarkGray
+        Write-HostTimestamp '  BITS only runs for a signed-in user, and this run is a scheduled task for a user who is not signed in, so the file is downloaded directly.'
     }
     if ($UseBits) {
         $Job = $null
@@ -1927,7 +2185,7 @@ function Get-HotpatchBaselineKb {
         return $null
     }
 
-    Write-HostTimestamp "  Microsoft's hotpatch calendar names KB$($Baseline.Kb) ($($Baseline.Release)) as the latest baseline." -ForegroundColor DarkGray
+    Write-HostTimestamp "  Microsoft's hotpatch calendar names KB$($Baseline.Kb) ($($Baseline.Release)) as the latest baseline."
     $script:HotpatchBaseline = $Baseline
     return $Baseline
 }
@@ -2080,7 +2338,7 @@ function Write-OfflineLcuCapNote {
     if ($script:OfflineLcuCapNoted -eq $Build) { return }
     $script:OfflineLcuCapNoted = $Build
     if ($Note.Ignored) { Write-HostTimestamp "  $($Note.Message)" -ForegroundColor Yellow }
-    else { Write-HostTimestamp "  $($Note.Message)" -ForegroundColor DarkGray }
+    else { Write-HostTimestamp "  $($Note.Message)" }
 }
 
 # A catalog search returns only its 25 newest matches, so one bounded by an older date can come back with
@@ -2268,13 +2526,13 @@ function Get-LatestCatalogPackage {
         }
         elseif ($TargetUbr -gt 0) {
             Write-HostTimestamp "  The media header says $CurrentBuild.$CurrentUbr and KB$PrimaryKb delivers $CurrentBuild.$TargetUbr, so the update will be integrated."
-            Write-HostTimestamp '  If this media is already patched and the header is out of date, -VerifyPatchLevel reads the real level and can skip it.' -ForegroundColor DarkGray
+            Write-HostTimestamp '  If this media is already patched and the header is out of date, -VerifyPatchLevel reads the real level and can skip it.'
         }
 
         if ($CurrentAt) {
             if (-not $Reapply) {
                 Write-HostTimestamp "  The image is already at $CurrentAt and KB$PrimaryKb delivers $CurrentBuild.$TargetUbr, so it adds nothing - skipping the download and the integration." -ForegroundColor Green
-                if ($HeaderTrusted) { Write-HostTimestamp '  The header was trusted without mounting the image. Use -VerifyPatchLevel to confirm it against the registry.' -ForegroundColor DarkGray }
+                if ($HeaderTrusted) { Write-HostTimestamp '  The header was trusted without mounting the image. Use -VerifyPatchLevel to confirm it against the registry.' }
                 if ($AlreadyCurrent) { $AlreadyCurrent.Value = $CurrentAt }
                 return $null
             }
@@ -2316,7 +2574,7 @@ function Get-LatestCatalogPackage {
             Remove-Item -LiteralPath $Destination -Force -ErrorAction Stop
         }
         if (Test-Path -LiteralPath $Destination) {
-            Write-HostTimestamp "  Already downloaded - reusing: $FileName" -ForegroundColor DarkGray
+            Write-HostTimestamp "  Already downloaded - reusing: $FileName"
         }
         else {
             Write-HostTimestamp "  Downloading $FileName ..."
@@ -2408,7 +2666,7 @@ function Get-Sha256 {
                     }
                 }
                 elseif ($Percent -ge $NextPercent -and $Timer.Elapsed.TotalSeconds -gt 0) {
-                    Write-HostTimestamp ('    {0}% ({1:N0} MB/s)' -f $Percent, ($Done / 1MB / $Timer.Elapsed.TotalSeconds)) -ForegroundColor DarkGray
+                    Write-HostTimestamp ('    {0}% ({1:N0} MB/s)' -f $Percent, ($Done / 1MB / $Timer.Elapsed.TotalSeconds))
                     $NextPercent = $Percent + 20
                 }
             }
@@ -2615,7 +2873,7 @@ function Write-BuildStamp {
         $HistoryFile = Join-Path -Path $StampHistoryDir -ChildPath ("stamp_{0}.json" -f (Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'))
         Set-Content -LiteralPath $HistoryFile -Value $Json -Encoding UTF8 -ErrorAction Stop
         Write-HostTimestamp "  Stamp written: $StampFile" -ForegroundColor Green
-        Write-HostTimestamp "  History copy : $HistoryFile" -ForegroundColor DarkGray
+        Write-HostTimestamp "  History copy : $HistoryFile"
         Get-ChildItem -LiteralPath $StampHistoryDir -Filter 'stamp_*.json' -File -ErrorAction SilentlyContinue |
             Sort-Object -Property LastWriteTime -Descending |
             Select-Object -Skip $StampHistoryCount |
@@ -2693,7 +2951,7 @@ function Set-CachedSha256 {
         Set-Content -LiteralPath $HashCacheFile -Value (Format-Json -Json ($Kept | ConvertTo-Json -Depth 4 -Compress)) -Encoding UTF8 -ErrorAction Stop
     }
     catch {
-        Write-HostTimestamp "  Could not record the hash for a later run: $($_.Exception.Message)" -ForegroundColor DarkGray
+        Write-HostTimestamp "  Could not record the hash for a later run: $($_.Exception.Message)"
     }
 }
 
@@ -2710,12 +2968,12 @@ function Get-SourceIsoHash {
         "$($Stamp.Source.Path)" -ieq $Item.FullName -and
         "$($Stamp.Source.Length)" -eq "$($Item.Length)" -and
         (Test-SameWriteTime -Recorded $Stamp.Source.LastWriteTimeUtc -Actual $Item.LastWriteTimeUtc)) {
-        Write-HostTimestamp '  The source ISO is untouched since the last run, so its recorded hash is reused.' -ForegroundColor DarkGray
+        Write-HostTimestamp '  The source ISO is untouched since the last run, so its recorded hash is reused.'
         return "$($Stamp.Source.Sha256)"
     }
     $Cached = Get-CachedSha256 -Item $Item
     if ($Cached) {
-        Write-HostTimestamp '  The source ISO was hashed by an earlier run that did not finish, and it has not changed since, so that hash is reused.' -ForegroundColor DarkGray
+        Write-HostTimestamp '  The source ISO was hashed by an earlier run that did not finish, and it has not changed since, so that hash is reused.'
         return $Cached
     }
     Write-HostTimestamp "  Hashing the source ISO ($([math]::Round($Item.Length / 1GB, 2)) GB)..."
@@ -2942,11 +3200,11 @@ function Invoke-AutoClean {
             Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
             $RemovedUpdates++
             $FreedMB += $SizeMB
-            Write-HostTimestamp ('  Deleted superseded update: {0} ({1:N0} MB)' -f $Name, $SizeMB) -ForegroundColor DarkGray
+            Write-HostTimestamp ('  Deleted superseded update: {0} ({1:N0} MB)' -f $Name, $SizeMB)
         }
         catch { Write-HostTimestamp "  Could not delete '$Name': $($_.Exception.Message)" -ForegroundColor Yellow }
     }
-    if ($RemovedUpdates -eq 0) { Write-HostTimestamp '  No superseded update packages to remove.' -ForegroundColor DarkGray }
+    if ($RemovedUpdates -eq 0) { Write-HostTimestamp '  No superseded update packages to remove.' }
 
     # 2. Generated ISOs: keep the newest -KeepIsoCount, delete the rest. Candidates are the ISOs named in
     #    the stamps plus any still sitting in the output folder under this script's generated name pattern
@@ -2971,16 +3229,16 @@ function Invoke-AutoClean {
     }
 
     if ($Candidates.Count -gt 0) {
-        Write-HostTimestamp "AutoClean candidates ($($Candidates.Count)):" -ForegroundColor DarkGray
+        Write-HostTimestamp "AutoClean candidates ($($Candidates.Count)):"
         foreach ($Candidate in $Candidates.Values) {
-            Write-HostTimestamp "  $($Candidate.FullName)" -ForegroundColor DarkGray
+            Write-HostTimestamp "  $($Candidate.FullName)"
         }
     }
 
     $Ordered = @($Candidates.Values | Sort-Object -Property LastWriteTime -Descending)
     $Stale = @($Ordered | Select-Object -Skip $KeepIsoCount | Where-Object { $ProtectedPaths -notcontains $_.FullName.ToLowerInvariant() })
     if ($Ordered.Count -gt 0) {
-        Write-HostTimestamp "  Found $($Ordered.Count) generated ISO(s), keeping the newest $KeepIsoCount." -ForegroundColor DarkGray
+        Write-HostTimestamp "  Found $($Ordered.Count) generated ISO(s), keeping the newest $KeepIsoCount."
     }
     $RemovedIsos = 0
     foreach ($Item in $Stale) {
@@ -2989,11 +3247,11 @@ function Invoke-AutoClean {
             Remove-Item -LiteralPath $Item.FullName -Force -ErrorAction Stop
             $RemovedIsos++
             $FreedMB += $SizeMB
-            Write-HostTimestamp ('  Deleted old ISO: {0} ({1:N0} MB)' -f $Item.Name, $SizeMB) -ForegroundColor DarkGray
+            Write-HostTimestamp ('  Deleted old ISO: {0} ({1:N0} MB)' -f $Item.Name, $SizeMB)
         }
         catch { Write-HostTimestamp "  Could not delete '$($Item.FullName)': $($_.Exception.Message)" -ForegroundColor Yellow }
     }
-    if ($RemovedIsos -eq 0) { Write-HostTimestamp '  No old ISOs to remove.' -ForegroundColor DarkGray }
+    if ($RemovedIsos -eq 0) { Write-HostTimestamp '  No old ISOs to remove.' }
 
     # 3. Locally cached source ISOs: a copy this script made of a remote/cloud -IsoPath under $DlDir, using
     #    the source's own file name. A stamp only records a RemoteOrigin when that happened, so an ISO the
@@ -3028,11 +3286,11 @@ function Invoke-AutoClean {
             Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
             $RemovedSourceIsos++
             $FreedMB += $SizeMB
-            Write-HostTimestamp ('  Deleted stale cached source ISO: {0} ({1:N0} MB)' -f $FileName, $SizeMB) -ForegroundColor DarkGray
+            Write-HostTimestamp ('  Deleted stale cached source ISO: {0} ({1:N0} MB)' -f $FileName, $SizeMB)
         }
         catch { Write-HostTimestamp "  Could not delete '$FileName': $($_.Exception.Message)" -ForegroundColor Yellow }
     }
-    if ($RemovedSourceIsos -eq 0) { Write-HostTimestamp '  No stale cached source ISOs to remove.' -ForegroundColor DarkGray }
+    if ($RemovedSourceIsos -eq 0) { Write-HostTimestamp '  No stale cached source ISOs to remove.' }
 
     # 4. Recovery ISOs, counted on their own so they never take an installation ISO's -KeepIsoCount slot.
     $RemovedRecoveryIsos = 0
@@ -3264,12 +3522,12 @@ function Register-UpdaterScheduledTask {
 
     $PrincipalUser = if ($TaskUsername) { $TaskUsername } else { 'SYSTEM' }
     Write-HostTimestamp "Scheduled task '$TaskName' registered: runs $When as $PrincipalUser." -ForegroundColor Green
-    Write-HostTimestamp "  Command: `"$Exe`" $ArgumentString" -ForegroundColor DarkGray
+    Write-HostTimestamp "  Command: `"$Exe`" $ArgumentString"
     if (-not $TaskUsername) {
         Write-HostTimestamp '  It runs as SYSTEM, so every path it uses must be a local path SYSTEM can reach (not a mapped drive or a cloud-synced user folder).' -ForegroundColor Yellow
     }
-    Write-HostTimestamp "  Each run compares the build stamp in $StampRoot and exits in a minute or two when nothing has changed." -ForegroundColor DarkGray
-    Write-HostTimestamp "  Remove it again with: -UnregisterScheduledTask -TaskName `"$TaskName`"" -ForegroundColor DarkGray
+    Write-HostTimestamp "  Each run compares the build stamp in $StampRoot and exits in a minute or two when nothing has changed."
+    Write-HostTimestamp "  Remove it again with: -UnregisterScheduledTask -TaskName `"$TaskName`""
 }
 #endregion
 
@@ -3754,7 +4012,7 @@ Remove-Item -LiteralPath '$EscCleanupScript' -Force
     }
 
     Write-HostTimestamp "    Registered the scheduled task '$CleanupTaskName' to clear it as SYSTEM at the next boot." -ForegroundColor Green
-    Write-HostTimestamp "      It strips the reparse point, deletes the orphaned WIMMount registry entry, then takes ownership and deletes the folder, logging to $CleanupLog." -ForegroundColor DarkGray
+    Write-HostTimestamp "      It strips the reparse point, deletes the orphaned WIMMount registry entry, then takes ownership and deletes the folder, logging to $CleanupLog."
     return $true
 }
 
@@ -3825,7 +4083,7 @@ function Dismount-ImageDiscard {
     $Foreign = @(Get-ForeignBrokenMount)
     if ($Foreign.Count -gt 0) {
         Write-HostTimestamp "      Not running /Cleanup-Mountpoints: it would also release $($Foreign.Count) broken mount(s) outside $WorkRoot." -ForegroundColor Yellow
-        foreach ($Other in $Foreign) { Write-HostTimestamp "        $($Other.Path)" -ForegroundColor DarkGray }
+        foreach ($Other in $Foreign) { Write-HostTimestamp "        $($Other.Path)" }
         Write-HostTimestamp '        Clear those yourself, or run this build with a -WorkPath nothing else is using.' -ForegroundColor Yellow
         return $false
     }
@@ -3932,7 +4190,7 @@ function Reset-MountDirectory {
     $ForeignBroken = @(Get-ForeignBrokenMount)
     if ($ForeignBroken.Count -gt 0) {
         Write-HostTimestamp "    Skipping the corrupt mount point cleanup: $($ForeignBroken.Count) broken mount(s) outside $WorkRoot would be released too." -ForegroundColor Yellow
-        foreach ($Other in $ForeignBroken) { Write-HostTimestamp "      $($Other.Path)" -ForegroundColor DarkGray }
+        foreach ($Other in $ForeignBroken) { Write-HostTimestamp "      $($Other.Path)" }
     }
     else {
         try { Clear-WindowsCorruptMountPoint -ErrorAction SilentlyContinue | Out-Null } catch { }
@@ -4307,7 +4565,7 @@ function Add-ServicingStack {
         # DISM often installs the bundled stack itself on the failed first pass, so finding it already there is
         # the stack being current, not a failure.
         if ($SsuExit -eq -2146498530) {
-            Write-HostTimestamp '      The image already has this servicing stack.' -ForegroundColor DarkGray
+            Write-HostTimestamp '      The image already has this servicing stack.'
             return $true
         }
         Write-HostTimestamp "      The servicing stack update did not apply either (exit code $(Format-ExitCode $SsuExit))." -ForegroundColor DarkYellow
@@ -4519,7 +4777,7 @@ function Add-UpdateGroup {
         # Once a run, and only where the bar is drawn, since a log reader never sees it.
         if (-not $script:DismProgressNoteShown -and (Get-ConsoleWidth) -gt 0) {
             $script:DismProgressNoteShown = $true
-            Write-HostTimestamp "      Note: DISM's percentage is only a rough guide. Depending on the update it can sit at one figure for many minutes and then jump, so the time beside it keeps counting while DISM works." -ForegroundColor DarkGray
+            Write-HostTimestamp "      Note: DISM's percentage is only a rough guide. Depending on the update it can sit at one figure for many minutes and then jump, so the time beside it keeps counting while DISM works."
         }
 
         # One retry, because transient problems (a locked file, a busy servicing stack) often clear on a second
@@ -4539,7 +4797,7 @@ function Add-UpdateGroup {
                 return $true
             }
             if ($Output -match '0x800f081e') {
-                Write-HostTimestamp '      Already present / not applicable - skipping.' -ForegroundColor DarkGray
+                Write-HostTimestamp '      Already present / not applicable - skipping.'
                 Add-ServicingResult -Image $ImageLabel -Package (Split-Path -Leaf $Target) -Result 'Skipped' -Detail 'Already present or not applicable (0x800F081E)' -Checkpoints $Checkpoints
                 return $true
             }
@@ -4574,7 +4832,7 @@ function Add-UpdateGroup {
         $LogErrors = @(Get-DismLogError -Path $DismLog)
         if ($LogErrors.Count -gt 0) {
             Write-HostTimestamp "      The errors DISM logged, last $($LogErrors.Count):" -ForegroundColor DarkYellow
-            foreach ($Line in $LogErrors) { Write-HostLog "        $Line" -ForegroundColor DarkGray }
+            foreach ($Line in $LogErrors) { Write-HostLog "        $Line" }
         }
         $SavedLog = Save-DismLog -Path $DismLog -Package $PackageName -ImageLabel $ImageLabel
         if ($SavedLog) { Write-HostTimestamp "      DISM's full log for this package: $SavedLog" -ForegroundColor DarkYellow }
@@ -4586,20 +4844,20 @@ function Add-UpdateGroup {
         if ($Unserviceable) {
             $Discarded = 'Tip: DISM reports this image can no longer be serviced, so it will be discarded rather than saved, and this edition keeps exactly what the source media had.'
             if (Test-DismEsuOfflineRefusal -LogPath $DismLog) {
-                Write-HostTimestamp "      $Discarded The update's Extended Security Updates step refuses to run on an offline image (it logged 'ESU: Offline is not supported'), so no ISO can carry this update and other media will not help. Windows installs it once setup finishes, through Windows Update or the after-setup answer file." -ForegroundColor DarkGray
+                Write-HostTimestamp "      $Discarded The update's Extended Security Updates step refuses to run on an offline image (it logged 'ESU: Offline is not supported'), so no ISO can carry this update and other media will not help. Windows installs it once setup finishes, through Windows Update or the after-setup answer file."
             }
             else {
                 # 0x80073713 is ERROR_ADVANCED_INSTALLER_FAILED: one of the update's install-time steps failed.
                 $Cause = if ($Code -eq '0x80073713') { "One of the setup steps the update runs inside the image failed. The DISM log names it on the line with 'Failed execution of queue item Installer'." }
                          else { 'Base media much older than the update, or media that was repacked, is the usual cause.' }
-                Write-HostTimestamp "      $Discarded $Cause An untouched official Microsoft ISO resolves it when the media is at fault." -ForegroundColor DarkGray
+                Write-HostTimestamp "      $Discarded $Cause An untouched official Microsoft ISO resolves it when the media is at fault."
             }
         }
         elseif ($Output -match '0x800f0823') {
-            Write-HostTimestamp '      Tip: 0x800F0823 means the image needs a newer servicing stack than it has, and the one bundled in this update did not take. Base media several years older than the update is the usual cause. Try newer media, or apply the standalone SSU for this release to the mounted image by hand before re-running.' -ForegroundColor DarkGray
+            Write-HostTimestamp '      Tip: 0x800F0823 means the image needs a newer servicing stack than it has, and the one bundled in this update did not take. Base media several years older than the update is the usual cause. Try newer media, or apply the standalone SSU for this release to the mounted image by hand before re-running.'
         }
         elseif ($Output -match '0x80070228') {
-            Write-HostTimestamp "      Tip: this is typically the base image, not the update. The install.wim files did not match their manifests, which is common with repacked or UUP-built ISOs. A clean official Microsoft ISO usually resolves it." -ForegroundColor DarkGray
+            Write-HostTimestamp "      Tip: this is typically the base image, not the update. The install.wim files did not match their manifests, which is common with repacked or UUP-built ISOs. A clean official Microsoft ISO usually resolves it."
         }
         return $false
     }
@@ -4647,7 +4905,7 @@ function Add-ImageDrivers {
 
     Write-HostTimestamp "      $Added added, $($Failed.Count) rejected. A rejected driver is usually unsigned, built for another architecture, or not a real driver package." -ForegroundColor Yellow
     if (-not $AllowUnsignedDrivers) {
-        Write-HostTimestamp '      Pass -AllowUnsignedDrivers if the rejected ones are unsigned and you accept that risk.' -ForegroundColor DarkGray
+        Write-HostTimestamp '      Pass -AllowUnsignedDrivers if the rejected ones are unsigned and you accept that risk.'
     }
     $Result = if ($Added -gt 0) { 'Partial' } else { 'Failed' }
     Add-ServicingResult -Image $ImageLabel -Package "$($InfFiles.Count) driver package(s)" -Result $Result -Detail "$Added added, rejected: $(($Failed | Select-Object -First 10) -join ', ')"
@@ -4661,7 +4919,7 @@ function Remove-ImageResidue {
     param([Parameter(Mandatory)][string]$MountDir)
 
     if (-not $StripImageResidue) {
-        Write-HostTimestamp '    Leaving the servicing residue in place (pass -StripImageResidue to remove it).' -ForegroundColor DarkGray
+        Write-HostTimestamp '    Leaving the servicing residue in place (pass -StripImageResidue to remove it).'
         return
     }
 
@@ -4746,7 +5004,7 @@ function Remove-ImageResidue {
         Write-HostTimestamp "      Could not fully remove $($Stuck -join ', '). The image's permissions denied it, so what is left will ship in the ISO." -ForegroundColor Yellow
     }
     if ($FreedMB -ge 1) {
-        Write-HostTimestamp ('    Stripped {0:N0} MB of servicing residue (logs and temp files Windows recreates on first boot).' -f $FreedMB) -ForegroundColor DarkGray
+        Write-HostTimestamp ('    Stripped {0:N0} MB of servicing residue (logs and temp files Windows recreates on first boot).' -f $FreedMB)
     }
 
     # Totalled across every image so the tattoo can state what this build removed.
@@ -4829,7 +5087,7 @@ function Save-ServicedWinReImage {
     }
     catch {
         # Not fatal, the remaining editions just each do the work themselves.
-        Write-HostTimestamp "      The serviced recovery image could not be kept for the other editions: $($_.Exception.Message)" -ForegroundColor DarkGray
+        Write-HostTimestamp "      The serviced recovery image could not be kept for the other editions: $($_.Exception.Message)"
     }
 }
 
@@ -4993,7 +5251,7 @@ function Show-FinalImageInfo {
     $Images = $null
     try { $Images = @(Get-WindowsImage -ImagePath $WimPath -ErrorAction Stop) } catch { }
     if (-not $Images -or $Images.Count -eq 0) {
-        Write-HostTimestamp '  Could not read the final image information.' -ForegroundColor DarkGray
+        Write-HostTimestamp '  Could not read the final image information.'
         return
     }
 
@@ -5292,7 +5550,7 @@ function New-RecoveryIso {
     $BootData = Get-OscdimgBootData -MediaRoot $RecoveryRoot
     if (-not $BootData) { throw 'the media has no boot sectors, so a recovery ISO built from it would not boot' }
     $RecoveryArgs = @('-m', '-o', '-u2', '-udfver102', "-l$Label", "-bootdata:$BootData", $RecoveryRoot, $BuildTarget)
-    Write-HostTimestamp "  Running: `"$Oscdimg`" $($RecoveryArgs -join ' ')" -ForegroundColor DarkGray
+    Write-HostTimestamp "  Running: `"$Oscdimg`" $($RecoveryArgs -join ' ')"
     $Proc = Start-Process -FilePath $Oscdimg -ArgumentList $RecoveryArgs -Wait -PassThru -NoNewWindow -ErrorAction Stop
     if ($Proc.ExitCode -ne 0) { throw "oscdimg returned exit code $($Proc.ExitCode)" }
     if (-not (Test-Path -LiteralPath $BuildTarget)) { throw 'oscdimg reported success but no ISO was written' }
@@ -5302,7 +5560,7 @@ function New-RecoveryIso {
     }
 
     Write-HostTimestamp ('  Recovery ISO created ({0:N0} MB, volume label {1}).' -f ((Get-Item -LiteralPath $Target).Length / 1MB), $Label) -ForegroundColor Green
-    if ($Re) { Write-HostTimestamp "  It boots the recovery environment at $($Re.Version)." -ForegroundColor DarkGray }
+    if ($Re) { Write-HostTimestamp "  It boots the recovery environment at $($Re.Version)." }
     return $Target
 }
 
@@ -5322,7 +5580,7 @@ function Remove-StaleRecoveryIso {
         Where-Object { $_.Name -match $RecoveryName } |
         Sort-Object -Property LastWriteTime -Descending)
     if ($RecoveryIsos.Count -gt 0) {
-        Write-HostTimestamp "  Found $($RecoveryIsos.Count) generated recovery ISO(s), keeping the newest $KeepCount." -ForegroundColor DarkGray
+        Write-HostTimestamp "  Found $($RecoveryIsos.Count) generated recovery ISO(s), keeping the newest $KeepCount."
     }
 
     $Removed = 0
@@ -5333,11 +5591,11 @@ function Remove-StaleRecoveryIso {
             Remove-Item -LiteralPath $Item.FullName -Force -ErrorAction Stop
             $Removed++
             $FreedMB += $SizeMB
-            Write-HostTimestamp ('  Deleted old recovery ISO: {0} ({1:N0} MB)' -f $Item.Name, $SizeMB) -ForegroundColor DarkGray
+            Write-HostTimestamp ('  Deleted old recovery ISO: {0} ({1:N0} MB)' -f $Item.Name, $SizeMB)
         }
         catch { Write-HostTimestamp "  Could not delete '$($Item.FullName)': $($_.Exception.Message)" -ForegroundColor Yellow }
     }
-    if ($Removed -eq 0) { Write-HostTimestamp '  No old recovery ISOs to remove.' -ForegroundColor DarkGray }
+    if ($Removed -eq 0) { Write-HostTimestamp '  No old recovery ISOs to remove.' }
     return [pscustomobject]@{ Removed = $Removed; FreedMB = $FreedMB }
 }
 #endregion
@@ -5406,7 +5664,7 @@ function Add-WorkPathDefenderExclusion {
             return
         }
         'Off' {
-            Write-HostTimestamp '-ExcludeWorkPathFromDefender: Defender real-time protection is already off, so there is nothing to exclude.' -ForegroundColor DarkGray
+            Write-HostTimestamp '-ExcludeWorkPathFromDefender: Defender real-time protection is already off, so there is nothing to exclude.'
             return
         }
     }
@@ -5418,7 +5676,7 @@ function Add-WorkPathDefenderExclusion {
         # Only the folders not already on the list are added, and only those are recorded for removal.
         $ToAdd = @($Folders | Where-Object { -not (Test-PathInList -List $Existing -Path $_) })
         if ($ToAdd.Count -eq 0) {
-            Write-HostTimestamp "The working folders ($Names) are already excluded from Defender scanning, so those exclusions are left as they are." -ForegroundColor DarkGray
+            Write-HostTimestamp "The working folders ($Names) are already excluded from Defender scanning, so those exclusions are left as they are."
             return
         }
         # Written before the exclusions are added, so no moment exists where Defender has them and nothing
@@ -5446,7 +5704,7 @@ function Add-WorkPathDefenderExclusion {
     $script:DefenderExclusionPaths = $ToAdd
     Start-DefenderExclusionWatcher
     Write-HostTimestamp "Excluded the folders DISM works in from Defender real-time scanning for this run: $Names (in $($WorkRoot.TrimEnd('\')))" -ForegroundColor Yellow
-    Write-HostTimestamp '  The exclusions come off again when the run ends, however it ends. Downloads and the finished ISO are still scanned.' -ForegroundColor DarkGray
+    Write-HostTimestamp '  The exclusions come off again when the run ends, however it ends. Downloads and the finished ISO are still scanned.'
 }
 
 # A hidden process that outlives this one by a moment: it waits for this process to end, then removes the
@@ -5474,7 +5732,7 @@ if (`$Record -and [int]`$Record.Pid -eq $PID) {
     }
     catch {
         # Not fatal: the normal end of the run removes them, and the next run clears a marker left behind.
-        Write-HostTimestamp "  Could not start the process that removes the exclusions if this run is cut short: $($_.Exception.Message)" -ForegroundColor DarkGray
+        Write-HostTimestamp "  Could not start the process that removes the exclusions if this run is cut short: $($_.Exception.Message)"
     }
 }
 
@@ -5484,7 +5742,7 @@ function Remove-WorkPathDefenderExclusion {
     try {
         Remove-MpPreference -ExclusionPath $script:DefenderExclusionPaths -ErrorAction Stop
         Remove-Item -LiteralPath (Get-DefenderExclusionMarker) -Force -ErrorAction SilentlyContinue
-        Write-HostTimestamp "Removed the Defender exclusions for the working folders: $(($script:DefenderExclusionPaths | ForEach-Object { Split-Path -Leaf $_ }) -join ', ')" -ForegroundColor DarkGray
+        Write-HostTimestamp "Removed the Defender exclusions for the working folders: $(($script:DefenderExclusionPaths | ForEach-Object { Split-Path -Leaf $_ }) -join ', ')"
         $script:DefenderExclusionPaths = $null
     }
     catch {
@@ -5503,7 +5761,7 @@ function Clear-StaleDefenderExclusion {
         $Paths = @($Record.Paths | Where-Object { $_ })
         if ($Paths.Count -gt 0 -and (Get-Command -Name Remove-MpPreference -ErrorAction SilentlyContinue)) {
             Remove-MpPreference -ExclusionPath $Paths -ErrorAction Stop
-            Write-HostTimestamp "Removed the Defender exclusions an interrupted run left behind: $($Paths -join ', ')" -ForegroundColor DarkGray
+            Write-HostTimestamp "Removed the Defender exclusions an interrupted run left behind: $($Paths -join ', ')"
             Write-Host $LineBreak
         }
         Remove-Item -LiteralPath $Marker -Force -ErrorAction SilentlyContinue
@@ -5693,13 +5951,137 @@ function Get-EnvironmentReport {
 #endregion
 #endregion
 
+#region Version check
+# Each run asks GitHub for the latest release, so an old copy of the script says so. The check must never slow a
+# build or stop one. The request starts before the run header and is collected after the environment report,
+# which takes about as long, and the whole check gives up after a few seconds. A check that cannot reach GitHub
+# is written only to the .log, so an offline or locked-down machine sees nothing about it on the console.
+# -SkipVersionCheck turns it off.
+$script:VersionCheckUrl = 'https://api.github.com/repos/bryceforsm/Windows-ISO-Updater/releases/latest'
+$script:LatestReleaseUrl = 'https://github.com/bryceforsm/Windows-ISO-Updater/releases/latest'
+
+# Sends the request and returns at once, without waiting for the answer. Returns an object holding the pending
+# request, or one holding the error when the request could not even be sent.
+function Start-VersionCheck {
+    param(
+        [string]$Url = $script:VersionCheckUrl,
+        [int]$TimeoutSeconds = 3
+    )
+    try {
+        Add-Type -AssemblyName System.Net.Http -ErrorAction Stop
+        # Windows PowerShell 5.1 can still default to TLS 1.0, which GitHub refuses.
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        $Client = New-Object System.Net.Http.HttpClient
+        $Client.Timeout = [timespan]::FromSeconds($TimeoutSeconds)
+        # GitHub's API refuses a request with no User-Agent. This one names only the script and its version.
+        $Client.DefaultRequestHeaders.UserAgent.ParseAdd("Windows-ISO-Updater/$ScriptVersion")
+        $Client.DefaultRequestHeaders.Accept.ParseAdd('application/vnd.github+json')
+        return [pscustomobject]@{
+            Client   = $Client
+            Task     = $Client.GetStringAsync($Url)
+            Deadline = [datetime]::UtcNow.AddSeconds($TimeoutSeconds)
+            Error    = $null
+        }
+    }
+    catch {
+        return [pscustomobject]@{ Client = $null; Task = $null; Deadline = [datetime]::UtcNow; Error = $_.Exception.Message }
+    }
+}
+
+# Compares this script's version with a release tag. Both are yyyy.MM.dd.<revision>, which [version] orders
+# correctly. Status is Latest, Outdated, Newer (a build from main that has not been released yet) or Failed.
+function Compare-ScriptVersion {
+    param(
+        [string]$Current,
+        [string]$Latest,
+        [string]$Url = $script:LatestReleaseUrl
+    )
+    $Tag = "$Latest".Trim() -replace '^[vV]', ''
+    $CurrentVersion = $null
+    $LatestVersion = $null
+    if (-not [version]::TryParse("$Current", [ref]$CurrentVersion)) {
+        return [pscustomobject]@{ Status = 'Failed'; Latest = $Tag; Url = $Url; Reason = "this script's version '$Current' is not a version number" }
+    }
+    if (-not [version]::TryParse($Tag, [ref]$LatestVersion)) {
+        return [pscustomobject]@{ Status = 'Failed'; Latest = $Tag; Url = $Url; Reason = "the latest release's tag '$Latest' is not a version number" }
+    }
+    $Status =
+        if ($CurrentVersion -lt $LatestVersion) { 'Outdated' }
+        elseif ($CurrentVersion -gt $LatestVersion) { 'Newer' }
+        else { 'Latest' }
+    return [pscustomobject]@{ Status = $Status; Latest = $Tag; Url = $Url; Reason = $null }
+}
+
+# Waits for the answer until the check's deadline at most, then compares it with this script's version. Never
+# throws: anything that goes wrong comes back as Status Failed with the reason.
+function Receive-VersionCheck {
+    param(
+        [Parameter(Mandatory)]$Check,
+        [string]$Current = $ScriptVersion
+    )
+    $Failed = { param($Reason) [pscustomobject]@{ Status = 'Failed'; Latest = $null; Url = $script:LatestReleaseUrl; Reason = $Reason } }
+    try {
+        if ($Check.Error) { return & $Failed $Check.Error }
+        $Wait = [int][math]::Max(0, ($Check.Deadline - [datetime]::UtcNow).TotalMilliseconds)
+        if (-not $Check.Task.Wait($Wait)) {
+            if ($Check.Client) { $Check.Client.CancelPendingRequests() }
+            return & $Failed 'GitHub did not answer in time'
+        }
+        $Release = $Check.Task.Result | ConvertFrom-Json
+        $Url = if ($Release.html_url) { "$($Release.html_url)" } else { $script:LatestReleaseUrl }
+        return Compare-ScriptVersion -Current $Current -Latest "$($Release.tag_name)" -Url $Url
+    }
+    catch {
+        # A failed request surfaces as an AggregateException, whose innermost error is the one worth logging.
+        return & $Failed $_.Exception.GetBaseException().Message
+    }
+    finally {
+        if ($Check.Client) { $Check.Client.Dispose() }
+    }
+}
+
+# Shows the result. A check that failed or was skipped goes only to the .log.
+function Write-VersionCheckResult {
+    param(
+        [Parameter(Mandatory)]$Result,
+        [string]$Current = $ScriptVersion
+    )
+    switch ($Result.Status) {
+        'Latest' {
+            Write-HostTimestamp ('{0,-15}: v{1} is the latest release' -f 'Version check', $Current) -ForegroundColor Green
+        }
+        'Outdated' {
+            Write-HostTimestamp ('{0,-15}: v{1} is available, and this is v{2}. Download it from {3}' -f 'Version check', $Result.Latest, $Current, $Result.Url) -ForegroundColor Yellow
+        }
+        'Newer' {
+            Write-HostTimestamp ('{0,-15}: v{1} is newer than the latest release, v{2}' -f 'Version check', $Current, $Result.Latest)
+        }
+        'Skipped' {
+            Write-CMTraceLog -Message 'Version check: skipped (-SkipVersionCheck).'
+        }
+        default {
+            Write-CMTraceLog -Message "Version check: could not find out whether v$Current is the latest release ($($Result.Reason)). See $($script:LatestReleaseUrl)."
+        }
+    }
+}
+#endregion
 #region Run header
+# A step that throws ends the run with PowerShell's own error. This finishes with the console first (taskbar,
+# title, bell), then lets the error through unchanged. A trap covers the whole script wherever it is written, so
+# it checks that the function exists, for an error raised before the functions are defined.
+trap {
+    if (Get-Command -Name Complete-ConsoleRun -CommandType Function -ErrorAction SilentlyContinue) { Complete-ConsoleRun -Failed }
+    break
+}
+
+# Started now and collected after the environment report, so waiting for GitHub overlaps work the run does anyway.
+$VersionCheck = if (-not $SkipVersionCheck) { Start-VersionCheck }
 Write-Host $LineBreak
 Write-HostTimestamp "Windows ISO Updater v$ScriptVersion (slipstream latest updates into a new ISO) on $($env:ComputerName)" -ForegroundColor Cyan
 Write-HostTimestamp "Run date       : $(Get-FriendlyDate)"
 if ($ConfigPath) {
     Write-HostTimestamp "Profile        : $ConfigPath"
-    Write-HostTimestamp "  Settings applied from it: $(if ($script:ProfileValues.Count -gt 0) { @($script:ProfileValues.Keys) -join ', ' } else { 'none' })" -ForegroundColor DarkGray
+    Write-HostTimestamp "  Settings applied from it: $(if ($script:ProfileValues.Count -gt 0) { @($script:ProfileValues.Keys) -join ', ' } else { 'none' })"
 }
 # Recorded because culture-sensitive parsing (e.g. the catalog's "Last Updated" column) breaks only on
 # non-en-US machines, so the log needs to say what locale actually ran without asking the reporter to check.
@@ -5714,6 +6096,8 @@ foreach ($EnvLine in (Get-EnvironmentReport -WorkRoot $WorkRoot)) {
     if ($EnvLine.Color -eq 'Gray') { Write-HostTimestamp $EnvText }
     else { Write-HostTimestamp $EnvText -ForegroundColor $EnvLine.Color }
 }
+$VersionCheckResult = if ($VersionCheck) { Receive-VersionCheck -Check $VersionCheck } else { [pscustomobject]@{ Status = 'Skipped' } }
+Write-VersionCheckResult -Result $VersionCheckResult
 if ($ServiceWinRE) {
     Write-HostTimestamp '-ServiceWinRE is deprecated and does nothing. The recovery image is serviced by default now, so pass -SkipWinRE to turn it off.' -ForegroundColor Yellow
 }
@@ -5723,7 +6107,7 @@ if ($Server) {
 if ($RecoveryIsoOnly) {
     if ($CheckOnly) {
         Write-HostTimestamp '-CheckOnly cannot be combined with -RecoveryIsoOnly, which keeps no build stamps to compare against.' -ForegroundColor Red
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
     $RecoveryIgnored = @('Edition', 'KeepEditions', 'KeepAllEditions', 'UpdatePath', 'SkipDotNet', 'SkipSetupDU', 'BaselineOnly',
@@ -5760,10 +6144,10 @@ if ($UnregisterScheduledTask) {
     }
     catch {
         Write-HostTimestamp "Could not remove the scheduled task '$TaskName': $($_.Exception.Message)" -ForegroundColor Red
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
-    Stop-Transcript | Out-Null
+    Stop-RunLogging | Out-Null
     exit 0
 }
 
@@ -5773,11 +6157,11 @@ if ($RegisterScheduledTask) {
     }
     catch {
         Write-HostTimestamp "Could not register the scheduled task: $($_.Exception.Message)" -ForegroundColor Red
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
     Write-Host $LineBreak
-    Stop-Transcript | Out-Null
+    Stop-RunLogging | Out-Null
     exit 0
 }
 
@@ -5798,7 +6182,7 @@ foreach ($Dir in @($WorkRoot, $DlDir)) {
     }
     catch {
         Write-HostTimestamp "Could not create the folder '$Dir': $($_.Exception.Message). Cannot continue." -ForegroundColor Red
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
 }
@@ -5823,7 +6207,7 @@ Write-HostLog "  Working folder   : $WorkRoot"
 Write-HostLog "    Extracted media: $ExtractDir"
 Write-HostLog "    DISM mount     : $MountDir"
 Write-HostLog "  Downloads        : $DlDir"
-if (-not $IsoPath) { Write-HostLog '                     (drop your own .iso here and it is used instead of downloading one)' -ForegroundColor DarkGray }
+if (-not $IsoPath) { Write-HostLog '                     (drop your own .iso here and it is used instead of downloading one)' }
 Write-HostLog "  Logs             : $LogDir"
 if (-not $NoStamp) { Write-HostLog "  Build stamps     : $StampRoot" }
 # Nothing has read the image yet, so only the parts settled before then are filled in. Only a client download
@@ -5833,8 +6217,8 @@ $IsoNameBase = "$($IsoNameRelease)_<edition>_<arch>_<language>_<build>.<UBR>_<da
 $IsoNameExample = "$IsoNamePrefix$IsoNameBase$IsoNameSuffix.iso"
 Write-HostLog "  Finished ISO     : $(if ($OutputIsoPath) { $OutputIsoPath } else { Join-Path $FinishedIsoDir $IsoNameExample })"
 Write-Host ''
-Write-HostLog '  Nothing outside these folders is changed. -WorkPath moves all of it, and -DownloadPath, -LogPath' -ForegroundColor DarkGray
-Write-HostLog '  and -OutputIsoPath override the individual folders.' -ForegroundColor DarkGray
+Write-HostLog '  Nothing outside these folders is changed. -WorkPath moves all of it, and -DownloadPath, -LogPath'
+Write-HostLog '  and -OutputIsoPath override the individual folders.'
 Write-Host $LineBreak
 
 #endregion
@@ -5854,7 +6238,7 @@ catch [System.Threading.AbandonedMutexException] { $HaveRunMutex = $true }
 if (-not $HaveRunMutex) {
     Write-HostTimestamp "Another Windows-ISO-Updater run is already using $WorkRoot." -ForegroundColor Red
     Write-HostTimestamp '  Wait for it to finish, or start this one with a different -WorkPath so the two do not share a mount folder.' -ForegroundColor Red
-    Stop-Transcript | Out-Null
+    Stop-RunLogging | Out-Null
     exit 1
 }
 
@@ -5887,7 +6271,7 @@ if ($StaleStages.Count -gt 0) {
         }
     }
     if ($StageRemoved -gt 0) {
-        Write-HostTimestamp ('Removed {0} staging folder(s) left behind by an interrupted run, freeing {1:N0} MB.' -f $StageRemoved, $StageFreedMB) -ForegroundColor DarkGray
+        Write-HostTimestamp ('Removed {0} staging folder(s) left behind by an interrupted run, freeing {1:N0} MB.' -f $StageRemoved, $StageFreedMB)
         Write-Host $LineBreak
     }
 }
@@ -5898,7 +6282,7 @@ foreach ($StaleIso in @(Get-ChildItem -LiteralPath $IsoStageDir -Filter '*.iso' 
     try {
         $StaleSizeMB = $StaleIso.Length / 1MB
         Remove-Item -LiteralPath $StaleIso.FullName -Force -ErrorAction Stop
-        Write-HostTimestamp ('Removed a staged ISO left behind by an interrupted run: {0} ({1:N0} MB).' -f $StaleIso.Name, $StaleSizeMB) -ForegroundColor DarkGray
+        Write-HostTimestamp ('Removed a staged ISO left behind by an interrupted run: {0} ({1:N0} MB).' -f $StaleIso.Name, $StaleSizeMB)
         Write-Host $LineBreak
     }
     catch {
@@ -5929,7 +6313,7 @@ foreach ($StaleName in @('Mount', 'WinREMount', 'BuildCheck')) {
     }
     catch {
         Write-HostTimestamp "  $($_.Exception.Message)" -ForegroundColor Red
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
 }
@@ -5942,7 +6326,7 @@ if ($MountsCleared) { Write-Host $LineBreak }
 if (Test-RemotePath -Path $WorkRoot) {
     Write-HostTimestamp "The working folder is not on a local disk: $WorkRoot" -ForegroundColor Red
     Write-HostTimestamp '  A UNC path, a mapped network drive, or a drive letter that does not exist in this session cannot be used to mount and service images. Point -WorkPath at a local drive with plenty of free space.' -ForegroundColor Red
-    Stop-Transcript | Out-Null
+    Stop-RunLogging | Out-Null
     exit 1
 }
 
@@ -5963,7 +6347,7 @@ else {
         }
         else {
             Write-HostTimestamp "CRITICAL: Less than $RequiredGB GB free on the working drive. Building a patched ISO needs a lot of scratch space. Free up space, choose another drive with -WorkPath, and try again." -ForegroundColor Red
-            Stop-Transcript | Out-Null
+            Stop-RunLogging | Out-Null
             exit 1
         }
     }
@@ -5983,7 +6367,7 @@ if (-not $ListEditions -and -not $CheckOnly -and -not $RecoveryIsoOnly) {
         Write-HostTimestamp 'The finished ISO could not be written where it is meant to go.' -ForegroundColor Red
         Write-HostTimestamp "  $OutputProblem" -ForegroundColor Red
         Write-HostTimestamp '  Fix the destination or point -OutputIsoPath somewhere else, then run again.' -ForegroundColor Red
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
     if ($OutputIsoPath) {
@@ -6002,7 +6386,7 @@ if (-not $ListEditions -and -not $CheckOnly -and -not $RecoveryIsoOnly) {
     $OutputIsRemote = Test-RemotePath -Path $OutputDir
     if ($OutputIsRemote) {
         Write-HostTimestamp '  That is a network location. Drive mappings belong to a logon session, so a scheduled run may not see it. A UNC path is the safer choice.' -ForegroundColor Yellow
-        Write-HostTimestamp "  The ISO will be built in $IsoStageDir and copied there once it is finished, so a share that stalls cannot cost the whole build." -ForegroundColor DarkGray
+        Write-HostTimestamp "  The ISO will be built in $IsoStageDir and copied there once it is finished, so a share that stalls cannot cost the whole build."
     }
     # Only worth saying when the ISO lands somewhere other than the working drive, which was measured above.
     $OutputQualifier = try { Split-Path -Path $OutputDir -Qualifier -ErrorAction SilentlyContinue } catch { $null }
@@ -6021,7 +6405,7 @@ if ($RecoveryIsoDir -and -not $ListEditions -and -not $CheckOnly) {
         Write-HostTimestamp 'The recovery ISO could not be written where it is meant to go.' -ForegroundColor Red
         Write-HostTimestamp "  $RecoveryProblem" -ForegroundColor Red
         Write-HostTimestamp '  Fix the destination or point -RecoveryIsoPath somewhere else, then run again.' -ForegroundColor Red
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
     Write-HostTimestamp "Recovery ISO   : $(if ($RecoveryIsoFile) { $RecoveryIsoFile } else { "$RecoveryIsoDir (generated name)" })" -ForegroundColor Green
@@ -6036,7 +6420,7 @@ $UnattendText = $null
 if ($UnattendPath) {
     if (-not (Test-Path -LiteralPath $UnattendPath -PathType Leaf)) {
         Write-HostTimestamp "The answer file '$UnattendPath' does not exist. Cannot continue." -ForegroundColor Red
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
     $ResolvedUnattend = (Resolve-Path -LiteralPath $UnattendPath).Path
@@ -6047,7 +6431,7 @@ if ($UnattendPath) {
     }
     catch {
         Write-HostTimestamp "The answer file '$ResolvedUnattend' is not valid XML: $($_.Exception.Message). Cannot continue." -ForegroundColor Red
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
     $UnattendText = $UnattendDoc.OuterXml
@@ -6071,7 +6455,7 @@ $ResolvedDriverPath = $null
 if ($DriverPath) {
     if (-not (Test-Path -LiteralPath $DriverPath -PathType Container)) {
         Write-HostTimestamp "The driver folder '$DriverPath' does not exist. Cannot continue." -ForegroundColor Red
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
     $ResolvedDriverPath = (Resolve-Path -LiteralPath $DriverPath).Path
@@ -6079,7 +6463,7 @@ if ($DriverPath) {
             Sort-Object -Property FullName)
     if ($script:DriverInfFiles.Count -eq 0) {
         Write-HostTimestamp "No .inf files were found anywhere under '$ResolvedDriverPath'. Extract the vendor's driver package first - an .exe or .msi installer cannot be injected into an image." -ForegroundColor Red
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
     # Hashed for the build stamp: dropping a newer driver in has to force a rebuild even though the path
@@ -6106,7 +6490,7 @@ $ResolvedExtraFiles = $null
 if ($ExtraFilesPath) {
     if (-not (Test-Path -LiteralPath $ExtraFilesPath -PathType Container)) {
         Write-HostTimestamp "The extra files folder '$ExtraFilesPath' does not exist. Cannot continue." -ForegroundColor Red
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
     $ResolvedExtraFiles = (Resolve-Path -LiteralPath $ExtraFilesPath).Path
@@ -6115,7 +6499,7 @@ if ($ExtraFilesPath) {
     $script:ExtraFileRecords = @(Get-FolderFileRecords -Path $ResolvedExtraFiles)
     if ($script:ExtraFileRecords.Count -eq 0) {
         Write-HostTimestamp "The extra files folder '$ResolvedExtraFiles' is empty. Cannot continue." -ForegroundColor Red
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
     $script:ExtraFilesHash = Get-FolderContentHash -Records $script:ExtraFileRecords
@@ -6145,7 +6529,7 @@ if ($RecoveryIsoOnly -and -not $Unattended -and -not $SkipInteractive -and -not 
     $Confirm = Read-Host "Type 'Y' to continue, or anything else to cancel"
     if ($Confirm -notin @('Y', 'y', 'Yes', 'yes')) {
         Write-HostTimestamp 'Operation cancelled by user.' -ForegroundColor Yellow
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 0
     }
     Write-Host $LineBreak
@@ -6193,13 +6577,13 @@ if (-not $Unattended -and -not $SkipInteractive -and -not $ListEditions -and -no
         }
         else {
             Write-HostLog "  - Download the latest cumulative update(s)$(if (-not $SkipDotNet) { ' and the latest .NET cumulative update' }) from the Microsoft Update Catalog"
-            Write-HostLog "      (the cumulative update is skipped entirely if the image already has that build)" -ForegroundColor DarkGray
+            Write-HostLog "      (the cumulative update is skipped entirely if the image already has that build)"
             if ($ReapplyUpdates) {
                 Write-HostLog "  - Integrate every update even if the image already has it (-ReapplyUpdates)" -ForegroundColor Yellow
                 Write-HostLog "      WARNING: this may leave the media's Setup binaries mismatched with boot.wim, which can stop Windows 11 Setup Dynamic Update from completing" -ForegroundColor Yellow
             }
             else {
-                Write-HostLog "      (and if it does, the .NET update, Dynamic Updates and boot.wim are left untouched too)" -ForegroundColor DarkGray
+                Write-HostLog "      (and if it does, the .NET update, Dynamic Updates and boot.wim are left untouched too)"
             }
             if ($VerifyPatchLevel) {
                 Write-HostLog "  - Mount the image read-only to confirm its real patch level before deciding (-VerifyPatchLevel)"
@@ -6242,7 +6626,7 @@ if (-not $Unattended -and -not $SkipInteractive -and -not $ListEditions -and -no
     }
     Write-HostLog "  - Recompile a new bootable ISO with oscdimg"
     if (-not $NoStamp) {
-        Write-HostLog "  - Record a stamp of the finished build in $StampRoot, so a later run can tell that nothing has changed" -ForegroundColor DarkGray
+        Write-HostLog "  - Record a stamp of the finished build in $StampRoot, so a later run can tell that nothing has changed"
     }
     if ($AutoClean) {
         Write-HostLog "  - DELETE the update packages earlier builds downloaded, and every generated ISO except the newest $KeepIsoCount (-AutoClean)" -ForegroundColor Yellow
@@ -6254,7 +6638,7 @@ if (-not $Unattended -and -not $SkipInteractive -and -not $ListEditions -and -no
     $Confirm = Read-Host "Type 'Y' to continue, or anything else to cancel"
     if ($Confirm -notin @('Y', 'y', 'Yes', 'yes')) {
         Write-HostTimestamp 'Operation cancelled by user.' -ForegroundColor Yellow
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 0
     }
     Write-Host $LineBreak
@@ -6289,7 +6673,7 @@ if (-not $ListEditions -and -not $CheckOnly) {
     if (-not $Oscdimg) {
         Write-HostTimestamp 'oscdimg.exe was not found and could not be downloaded. It is part of the Windows ADK "Deployment Tools" feature and is required to recompile the ISO.' -ForegroundColor Red
         Write-HostTimestamp 'Re-run with -InstallAdk to have this script download and install the ADK automatically, or install the Windows ADK (Deployment Tools) manually from Microsoft and re-run.' -ForegroundColor Yellow
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
 }
@@ -6303,7 +6687,7 @@ if ($IsoPath) {
         $FolderIso = Find-SourceIso -Directory $IsoPath -Largest:$UseLargestIso
         if (-not $FolderIso) {
             Write-HostTimestamp "-IsoPath '$IsoPath' is a folder, but it holds no .iso larger than 3 GB. The search is not recursive, so an ISO in a subfolder is not found. Cannot continue." -ForegroundColor Red
-            Stop-Transcript | Out-Null
+            Stop-RunLogging | Out-Null
             exit 1
         }
         $ResolvedIso = $FolderIso.FullName
@@ -6316,7 +6700,7 @@ if ($IsoPath) {
     }
     else {
         Write-HostTimestamp "The ISO path '$IsoPath' does not exist. Cannot continue." -ForegroundColor Red
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
 
@@ -6366,13 +6750,13 @@ else {
             Write-HostTimestamp 'No Windows Server ISO was found, and Server media cannot be downloaded automatically (neither Fido nor the Media Creation Tool serves it).' -ForegroundColor Red
             Write-HostTimestamp '  Get the ISO from the Microsoft Evaluation Center, your Volume Licensing Service Center, or a Visual Studio subscription, then re-run with -IsoPath "C:\path\to\Server.iso"' -ForegroundColor Yellow
             Write-HostTimestamp "  or drop the .iso into the download folder and re-run - it is picked up automatically: $DlDir" -ForegroundColor Yellow
-            Stop-Transcript | Out-Null
+            Stop-RunLogging | Out-Null
             exit 1
         }
         # -CheckOnly answers a question, so it never spends 8 GB of bandwidth to do it.
         if ($CheckOnly) {
             Write-HostTimestamp 'No ISO is available locally, so there is nothing to compare against - a build is needed.' -ForegroundColor Yellow
-            Stop-Transcript | Out-Null
+            Stop-RunLogging | Out-Null
             exit 10
         }
         # Fido is opt-in, so without -UseFido this lands on the same fallbacks a blocked link request
@@ -6381,7 +6765,7 @@ else {
             $ResolvedIso = Get-IsoViaMct -Version $WindowsVersion -Language $Language -Architecture $WinInfo.Architecture -DownloadDir $DlDir
             if (-not $ResolvedIso) {
                 Write-HostTimestamp 'No ISO was produced with the Media Creation Tool. Cannot continue.' -ForegroundColor Red
-                Stop-Transcript | Out-Null
+                Stop-RunLogging | Out-Null
                 exit 1
             }
         }
@@ -6417,7 +6801,7 @@ else {
                 if (-not $ResolvedIso) {
                     Write-HostTimestamp 'Download the ISO yourself from https://www.microsoft.com/software-download, then either re-run with -IsoPath "C:\path\to\Windows.iso"' -ForegroundColor Yellow
                     Write-HostTimestamp "or simply drop the .iso into the download folder and re-run - it is picked up automatically: $DlDir" -ForegroundColor Yellow
-                    Stop-Transcript | Out-Null
+                    Stop-RunLogging | Out-Null
                     exit 1
                 }
             }
@@ -6435,13 +6819,13 @@ else {
                 if (-not (Get-FileDownload -Url $script:IsoUrl -Destination $ResolvedIso)) {
                     Write-HostTimestamp 'ISO download failed. Microsoft may be rate-limiting/blocking your IP for repeated ISO requests.' -ForegroundColor Red
                     Write-HostTimestamp 'Download the ISO yourself from https://www.microsoft.com/software-download and re-run with -IsoPath "C:\path\to\Windows.iso".' -ForegroundColor Yellow
-                    Stop-Transcript | Out-Null
+                    Stop-RunLogging | Out-Null
                     exit 1
                 }
                 $SizeGB = [math]::Round((Get-Item -LiteralPath $ResolvedIso).Length / 1GB, 2)
                 if ($SizeGB -lt 3) {
                     Write-HostTimestamp "The downloaded file is only $SizeGB GB - that is too small to be a Windows ISO. The download likely failed." -ForegroundColor Red
-                    Stop-Transcript | Out-Null
+                    Stop-RunLogging | Out-Null
                     exit 1
                 }
                 Write-HostTimestamp "  Download complete ($SizeGB GB)." -ForegroundColor Green
@@ -6484,7 +6868,7 @@ if ($ListEditions) {
         if ($ListMount) { Dismount-DiskImage -ImagePath $ResolvedIso -ErrorAction SilentlyContinue | Out-Null }
     }
     Write-Host $LineBreak
-    Stop-Transcript | Out-Null
+    Stop-RunLogging | Out-Null
     exit 0
 }
 
@@ -6646,15 +7030,19 @@ if ($RecoveryIsoOnly) {
 
     Write-HostTimestamp "Total run time: $(Format-Duration ((Get-Date) - $script:ScriptStartTime))" -ForegroundColor Cyan
     if ($RecoveryExit -eq 0) {
-        Write-HostTimestamp 'Done. Your recovery ISO is ready:' -ForegroundColor Green
-        Write-HostTimestamp "  $script:RecoveryIsoOutput" -ForegroundColor Green
+        $Summary = [ordered]@{ 'ISO' = $script:RecoveryIsoOutput }
+        $FinishedIso = Get-Item -LiteralPath $script:RecoveryIsoOutput -ErrorAction SilentlyContinue
+        if ($FinishedIso) { $Summary['Size'] = '{0:N0} MB' -f ($FinishedIso.Length / 1MB) }
+        $Summary['Run time'] = Format-Duration ((Get-Date) - $script:ScriptStartTime)
+        Write-SummaryBox -Title 'Done. Your recovery ISO is ready' -Rows $Summary
         Write-HostLog 'Boot it, or a USB stick written from it, and it opens straight to the Windows Recovery Environment.'
     }
     Write-Host $LineBreak
+    Complete-ConsoleRun -Failed:($RecoveryExit -ne 0)
     if (-not $Unattended -and -not $SkipInteractive) {
         Read-Host -Prompt 'Press enter to exit'
     }
-    Stop-Transcript | Out-Null
+    Stop-RunLogging | Out-Null
     exit $RecoveryExit
 }
 
@@ -6693,8 +7081,8 @@ if (-not $NoStamp) {
             # otherwise looks like it only compared local files and never asked Microsoft anything.
             if ($script:ExpectedUpdateSet -and -not $SkipUpdates -and -not $SkipServicing -and -not $UpdatePath) {
                 $Listed = @($script:ExpectedUpdateSet | ForEach-Object { $_ -replace '^(\w+)=(.+)@(.+)$', '$1 $2 (published $3)' })
-                Write-HostTimestamp "  The Microsoft Update Catalog was checked for $(Get-CatalogProductQuery -FeatureUpdate $StampFeature) $StampArch, newest available:" -ForegroundColor DarkGray
-                foreach ($Item in $Listed) { Write-HostTimestamp "    $Item" -ForegroundColor DarkGray }
+                Write-HostTimestamp "  The Microsoft Update Catalog was checked for $(Get-CatalogProductQuery -FeatureUpdate $StampFeature) $StampArch, newest available:"
+                foreach ($Item in $Listed) { Write-HostTimestamp "    $Item" }
             }
         }
 
@@ -6707,11 +7095,11 @@ if (-not $NoStamp) {
     if ($CheckOnly) {
         if ($script:StampDecision.Rebuild) {
             Write-HostTimestamp 'A rebuild is needed (exit code 10).' -ForegroundColor Yellow
-            Stop-Transcript | Out-Null
+            Stop-RunLogging | Out-Null
             exit 10
         }
         Write-HostTimestamp 'Nothing has changed, so no rebuild is needed (exit code 0).' -ForegroundColor Green
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 0
     }
 
@@ -6724,14 +7112,14 @@ if (-not $NoStamp) {
             if ($script:PreviousStamp -and $script:PreviousStamp.Output) {
                 Write-HostTimestamp "The ISO from that build is still current: $($script:PreviousStamp.Output.Path)" -ForegroundColor Green
             }
-            Write-HostTimestamp 'Use -Force to build anyway.' -ForegroundColor DarkGray
+            Write-HostTimestamp 'Use -Force to build anyway.'
             if ($AutoClean) {
                 Invoke-Task -Description 'Cleaning up old downloads and ISOs (-AutoClean)...' -ScriptBlock {
                     Invoke-AutoClean -CurrentStamp $script:PreviousStamp -History (Get-BuildStampHistory) -KeepIsoCount $KeepIsoCount -Protected @($ResolvedIso)
                 }
             }
             else { Write-Host $LineBreak }
-            Stop-Transcript | Out-Null
+            Stop-RunLogging | Out-Null
             exit 0
         }
     }
@@ -6739,7 +7127,7 @@ if (-not $NoStamp) {
 }
 elseif ($CheckOnly) {
     Write-HostTimestamp '-CheckOnly needs the build stamps to compare against, but -NoStamp turned them off. Assuming a rebuild is needed (exit code 10).' -ForegroundColor Yellow
-    Stop-Transcript | Out-Null
+    Stop-RunLogging | Out-Null
     exit 10
 }
 
@@ -6806,13 +7194,13 @@ try {
 catch {
     Write-HostTimestamp "Could not extract the ISO: $($_.Exception.Message)" -ForegroundColor Red
     if ($MountedImage) { Dismount-DiskImage -ImagePath $ResolvedIso -ErrorAction SilentlyContinue | Out-Null }
-    Stop-Transcript | Out-Null
+    Stop-RunLogging | Out-Null
     exit 1
 }
 finally {
     if ($MountedImage) {
         Dismount-DiskImage -ImagePath $ResolvedIso -ErrorAction SilentlyContinue | Out-Null
-        Write-HostTimestamp '  Dismounted the source ISO.' -ForegroundColor DarkGray
+        Write-HostTimestamp '  Dismounted the source ISO.'
     }
 }
 Write-Host $LineBreak
@@ -6871,7 +7259,7 @@ if (-not (Test-Path -LiteralPath $InstallWimExtracted) -and (Test-Path -LiteralP
 
 if (-not (Test-Path -LiteralPath $InstallWimExtracted)) {
     Write-HostTimestamp 'No editable install.wim is present after extraction. Cannot continue.' -ForegroundColor Red
-    Stop-Transcript | Out-Null
+    Stop-RunLogging | Out-Null
     exit 1
 }
 
@@ -6931,7 +7319,7 @@ if ($ImageBuild -gt 0 -and $ImageBuild -lt 10240) {
     if ($WillService) {
         Write-HostTimestamp '  DISM on this host cannot service an image that old, and the Microsoft Update Catalog has no cumulative update for it, so this run stops here.' -ForegroundColor Red
         Write-HostTimestamp '  Re-run with -SkipUpdates and without -DriverPath to repack the media unchanged, which still applies -UnattendPath, -ExtraFilesPath and the new volume label.' -ForegroundColor Yellow
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
     Write-HostTimestamp '  Nothing will be serviced, so no image is mounted and the media is only repacked.' -ForegroundColor Yellow
@@ -6945,7 +7333,7 @@ if (-not $NoStamp -and $script:ExpectedUpdateFor -ne "$FeatureName|$CatalogArch"
     Invoke-Task -Description 'Checking which updates the Microsoft Update Catalog is offering for this image...' -ScriptBlock {
         $script:ExpectedUpdateSet = Get-ExpectedUpdateSet -FeatureName $FeatureName -CatalogArch $CatalogArch -Build $ImageBuild
         $script:ExpectedUpdateFor = "$FeatureName|$CatalogArch"
-        if ($script:ExpectedUpdateSet) { Write-HostTimestamp "  $($script:ExpectedUpdateSet -join ', ')" -ForegroundColor DarkGray }
+        if ($script:ExpectedUpdateSet) { Write-HostTimestamp "  $($script:ExpectedUpdateSet -join ', ')" }
     }
 }
 
@@ -7003,7 +7391,7 @@ else {
         Write-HostTimestamp "Neither this script nor the image itself could name the release build $ImageBuild belongs to, so there is no catalog query that can identify this media." -ForegroundColor Red
         Write-HostTimestamp '  Searching on the product name alone would return an update for a different Server release, which DISM would refuse to apply, so this run stops here.' -ForegroundColor Red
         Write-HostTimestamp '  Supply the packages yourself with -UpdatePath, or use -SkipUpdates to repack the media unchanged.' -ForegroundColor Yellow
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
     if (-not $FeatureName) {
@@ -7053,7 +7441,7 @@ else {
         $Patched = if ($script:OfflineLcuCapRecord -and $script:OfflineLcuCapRecord.Status -ne 'Ignored') { 'as far as an offline update can take it' } else { 'fully patched' }
         Write-HostTimestamp "The image is already $Patched ($script:LcuUpToDate), so no cumulative update is needed." -ForegroundColor Green
         Add-ServicingResult -Image 'install.wim, boot.wim, winre.wim and the media sources folder' -Package 'Cumulative, .NET, Setup and Safe OS Dynamic Updates' -Result 'Skipped' -Detail "The media is already at $script:LcuUpToDate, so it is left as it shipped"
-        Write-HostTimestamp '  The .NET update, both Dynamic Updates and boot.wim are left exactly as the media shipped them, so its Setup files stay matched to its images. Use -ReapplyUpdates to integrate everything anyway.' -ForegroundColor DarkGray
+        Write-HostTimestamp '  The .NET update, both Dynamic Updates and boot.wim are left exactly as the media shipped them, so its Setup files stay matched to its images. Use -ReapplyUpdates to integrate everything anyway.'
         Write-Host $LineBreak
     }
     elseif ($script:LcuSkippedBaselineOnly) {
@@ -7062,7 +7450,7 @@ else {
     }
     else {
         Write-HostTimestamp 'Could not obtain a cumulative update from the catalog. You can supply one with -UpdatePath, or use -SkipUpdates to just recompile the ISO.' -ForegroundColor Red
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
 
@@ -7097,7 +7485,7 @@ else {
         if (-not $script:SetupDu) {
             Write-HostTimestamp '  No Setup Dynamic Update was found. The media Setup files will only be refreshed from boot.wim, which can make Windows Setup fail on the finished ISO.' -ForegroundColor Yellow
             if ($script:EffectiveServer) {
-                Write-HostTimestamp '  Microsoft does not publish one for every Server release, so this can be expected on older Server media.' -ForegroundColor DarkGray
+                Write-HostTimestamp '  Microsoft does not publish one for every Server release, so this can be expected on older Server media.'
             }
             Write-Host $LineBreak
         }
@@ -7196,7 +7584,7 @@ elseif ($KeepEditions -and $KeepEditions.Count -gt 0) {
         Write-HostTimestamp "These -KeepEditions values did not match any edition: $($KeepUnmatched -join ', ')" -ForegroundColor Red
         Write-HostTimestamp 'Available editions:' -ForegroundColor Yellow
         $InstallImages | ForEach-Object { Write-HostLog "    [$($_.ImageIndex)] $($_.ImageName)" }
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
     else {
@@ -7218,7 +7606,7 @@ elseif ($InstallImages.Count -gt 1) {
     $DroppedNames = $InstallImages | Where-Object { $KeepIndexes -notcontains [int]$_.ImageIndex } | ForEach-Object { $_.ImageName }
     $EditionRule = if ($script:EffectiveServer) { 'the most upgradeable edition' } elseif ($KeepIndexes.Count -gt 1) { 'the Enterprise, Pro and Home editions the media carries' } else { 'one edition' }
     Write-HostTimestamp "Keeping only $EditionRule to speed up the build: $($KeptNames -join ', '). Use -KeepAllEditions to keep them all, or -KeepEditions to choose." -ForegroundColor Cyan
-    if ($script:EffectiveServer) { Write-HostTimestamp '  Standard can be upgraded to Datacenter in place with DISM /Set-Edition, but Datacenter can never be downgraded, so Standard is the safer edition to ship.' -ForegroundColor DarkGray }
+    if ($script:EffectiveServer) { Write-HostTimestamp '  Standard can be upgraded to Datacenter in place with DISM /Set-Edition, but Datacenter can never be downgraded, so Standard is the safer edition to ship.' }
     if ($DroppedNames) { Write-HostTimestamp "Removing from the ISO: $($DroppedNames -join ', ')" -ForegroundColor Yellow }
     Write-Host $LineBreak
 }
@@ -7235,7 +7623,7 @@ else {
     if ($EdIndexes.Count -eq 0) {
         Write-HostTimestamp "Edition '$Edition' was not found in the image. Available editions:" -ForegroundColor Red
         $InstallImages | ForEach-Object { Write-HostLog "    [$($_.ImageIndex)] $($_.ImageName)" }
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
     # Only service editions we are keeping in the final ISO.
@@ -7281,12 +7669,12 @@ if ($UpdateGroups.Count -gt 0 -or $script:DriverInfFiles.Count -gt 0) {
                 $WinReBefore = Get-WinReVersion -WinReWim $WinReWim
                 if ($WinReBefore) {
                     Add-WinReVersionSample -Label $WinReVersionLabel -Version $WinReBefore.Version
-                    Write-HostTimestamp "    The recovery image is at $($WinReBefore.Version)." -ForegroundColor DarkGray
+                    Write-HostTimestamp "    The recovery image is at $($WinReBefore.Version)."
                 }
 
                 if (-not $SkipWinRE -and $SafeOsGroup) {
                     if (-not (Test-Path -LiteralPath $WinReWim)) {
-                        Write-HostTimestamp '    This edition carries no winre.wim, so there is no recovery image to service.' -ForegroundColor DarkGray
+                        Write-HostTimestamp '    This edition carries no winre.wim, so there is no recovery image to service.'
                     }
                     elseif (-not $ReapplyUpdates -and (Test-WinReAlreadyCurrent -WinReWim $WinReWim -KbNumber $script:SafeOsKb -Version $WinReBefore)) {
                         Add-ServicingResult -Image $WinReLabel -Package "KB$($script:SafeOsKb)" -Result 'Skipped' -Detail 'Already at the build this Safe OS Dynamic Update delivers'
@@ -7709,13 +8097,13 @@ if ($ResolvedExtraFiles) {
                 Write-HostTimestamp "    \$Relative ($SizeKB KB) REPLACED" -ForegroundColor Yellow
             }
             else {
-                Write-HostTimestamp "    \$Relative ($SizeKB KB)" -ForegroundColor DarkGray
+                Write-HostTimestamp "    \$Relative ($SizeKB KB)"
             }
         }
         Write-HostTimestamp "  Copied $($script:ExtraFilesCopied) file(s) to the root of the media." -ForegroundColor Green
 
         if ($script:ExtraFileOverwrites.Count -eq 0) {
-            Write-HostTimestamp '  Nothing the media already had was replaced.' -ForegroundColor DarkGray
+            Write-HostTimestamp '  Nothing the media already had was replaced.'
             return
         }
 
@@ -7994,7 +8382,7 @@ Invoke-Task -Description "Recompiling the bootable ISO to $BuildIsoPath ..." -Sc
     $OscdimgArgs = @('-m', '-o', '-u2', '-udfver102', "-l$IsoVolumeLabel")
     if ($BootArg) { $OscdimgArgs += "-bootdata:$BootArg" }
     $OscdimgArgs += @($ExtractDir, $BuildIsoPath)
-    Write-HostTimestamp "  Volume label: $IsoVolumeLabel" -ForegroundColor DarkGray
+    Write-HostTimestamp "  Volume label: $IsoVolumeLabel"
 
     # Run oscdimg and wait for it to finish, then verify it actually produced the ISO.
     Write-HostTimestamp "  Running: `"$Oscdimg`" $($OscdimgArgs -join ' ')"
@@ -8176,20 +8564,22 @@ if ($script:StepTimings.Count -gt 0) {
     }
     $Slowest = $script:StepTimings | Sort-Object -Property Duration -Descending | Select-Object -First 1
     Write-Host ''
-    Write-HostTimestamp "Longest step: $($Slowest.Description) ($(Format-Duration $Slowest.Duration))" -ForegroundColor DarkGray
+    Write-HostTimestamp "Longest step: $($Slowest.Description) ($(Format-Duration $Slowest.Duration))"
 }
 Write-HostTimestamp "Total run time: $(Format-Duration $TotalElapsed) (started $($script:ScriptStartTime.ToString('HH:mm:ss')), finished $((Get-Date).ToString('HH:mm:ss')))" -ForegroundColor Cyan
 Write-Host $LineBreak
 
-Write-HostTimestamp 'Done. Your updated Windows installation ISO is ready:' -ForegroundColor Green
-Write-HostTimestamp "  $OutputIsoPath" -ForegroundColor Green
-if ($script:RecoveryIsoOutput) {
-    Write-HostTimestamp 'Recovery ISO:' -ForegroundColor Green
-    Write-HostTimestamp "  $script:RecoveryIsoOutput" -ForegroundColor Green
-}
-if (-not $SkipTattoo) {
-    Write-HostTimestamp '  Open \WISO-Build on the ISO for the record of how it was built.' -ForegroundColor DarkGray
-}
+# What people copy out of a finished run, in one place.
+$Summary = [ordered]@{ 'ISO' = $OutputIsoPath }
+$FinishedIso = Get-Item -LiteralPath $OutputIsoPath -ErrorAction SilentlyContinue
+if ($FinishedIso) { $Summary['Size'] = '{0:N2} GB' -f ($FinishedIso.Length / 1GB) }
+if ($script:FinalBuildString) { $Summary['Build'] = "$script:FinalBuildString" }
+$SummaryEditions = @($InstallImages | Where-Object { $_ -and $KeepIndexes -contains [int]$_.ImageIndex } | ForEach-Object { "$($_.ImageName)" })
+if ($SummaryEditions.Count -gt 0) { $Summary['Editions'] = $SummaryEditions -join ', ' }
+if ($script:RecoveryIsoOutput) { $Summary['Recovery ISO'] = $script:RecoveryIsoOutput }
+$Summary['Run time'] = Format-Duration $TotalElapsed
+if (-not $SkipTattoo) { $Summary['Build record'] = '\WISO-Build on the ISO' }
+Write-SummaryBox -Title 'Done. Your updated Windows installation ISO is ready' -Rows $Summary
 Write-Host ''
 # Every package that failed on any image, boot.wim and the recovery image included, so the warnings that scrolled
 # past during servicing are not the only place a failure shows.
@@ -8209,6 +8599,7 @@ Write-Host $LineBreak
 
 Remove-WorkPathDefenderExclusion
 Write-HostTimestamp 'Windows ISO Updater script finished.' -ForegroundColor Green
+Complete-ConsoleRun
 if (-not $Unattended -and -not $SkipInteractive) {
     Read-Host -Prompt 'Press enter to exit'
 }
@@ -8217,5 +8608,5 @@ if (-not $Unattended -and -not $SkipInteractive) {
 
 #region End Logging
 # Stop logging
-Stop-Transcript
+Stop-RunLogging
 #endregion

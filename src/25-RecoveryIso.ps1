@@ -65,7 +65,7 @@ function New-RecoveryIso {
     $BootData = Get-OscdimgBootData -MediaRoot $RecoveryRoot
     if (-not $BootData) { throw 'the media has no boot sectors, so a recovery ISO built from it would not boot' }
     $RecoveryArgs = @('-m', '-o', '-u2', '-udfver102', "-l$Label", "-bootdata:$BootData", $RecoveryRoot, $BuildTarget)
-    Write-HostTimestamp "  Running: `"$Oscdimg`" $($RecoveryArgs -join ' ')" -ForegroundColor DarkGray
+    Write-HostTimestamp "  Running: `"$Oscdimg`" $($RecoveryArgs -join ' ')"
     $Proc = Start-Process -FilePath $Oscdimg -ArgumentList $RecoveryArgs -Wait -PassThru -NoNewWindow -ErrorAction Stop
     if ($Proc.ExitCode -ne 0) { throw "oscdimg returned exit code $($Proc.ExitCode)" }
     if (-not (Test-Path -LiteralPath $BuildTarget)) { throw 'oscdimg reported success but no ISO was written' }
@@ -75,7 +75,7 @@ function New-RecoveryIso {
     }
 
     Write-HostTimestamp ('  Recovery ISO created ({0:N0} MB, volume label {1}).' -f ((Get-Item -LiteralPath $Target).Length / 1MB), $Label) -ForegroundColor Green
-    if ($Re) { Write-HostTimestamp "  It boots the recovery environment at $($Re.Version)." -ForegroundColor DarkGray }
+    if ($Re) { Write-HostTimestamp "  It boots the recovery environment at $($Re.Version)." }
     return $Target
 }
 
@@ -95,7 +95,7 @@ function Remove-StaleRecoveryIso {
         Where-Object { $_.Name -match $RecoveryName } |
         Sort-Object -Property LastWriteTime -Descending)
     if ($RecoveryIsos.Count -gt 0) {
-        Write-HostTimestamp "  Found $($RecoveryIsos.Count) generated recovery ISO(s), keeping the newest $KeepCount." -ForegroundColor DarkGray
+        Write-HostTimestamp "  Found $($RecoveryIsos.Count) generated recovery ISO(s), keeping the newest $KeepCount."
     }
 
     $Removed = 0
@@ -106,11 +106,11 @@ function Remove-StaleRecoveryIso {
             Remove-Item -LiteralPath $Item.FullName -Force -ErrorAction Stop
             $Removed++
             $FreedMB += $SizeMB
-            Write-HostTimestamp ('  Deleted old recovery ISO: {0} ({1:N0} MB)' -f $Item.Name, $SizeMB) -ForegroundColor DarkGray
+            Write-HostTimestamp ('  Deleted old recovery ISO: {0} ({1:N0} MB)' -f $Item.Name, $SizeMB)
         }
         catch { Write-HostTimestamp "  Could not delete '$($Item.FullName)': $($_.Exception.Message)" -ForegroundColor Yellow }
     }
-    if ($Removed -eq 0) { Write-HostTimestamp '  No old recovery ISOs to remove.' -ForegroundColor DarkGray }
+    if ($Removed -eq 0) { Write-HostTimestamp '  No old recovery ISOs to remove.' }
     return [pscustomobject]@{ Removed = $Removed; FreedMB = $FreedMB }
 }
 #endregion

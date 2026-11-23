@@ -342,7 +342,7 @@ function Add-ServicingStack {
         # DISM often installs the bundled stack itself on the failed first pass, so finding it already there is
         # the stack being current, not a failure.
         if ($SsuExit -eq -2146498530) {
-            Write-HostTimestamp '      The image already has this servicing stack.' -ForegroundColor DarkGray
+            Write-HostTimestamp '      The image already has this servicing stack.'
             return $true
         }
         Write-HostTimestamp "      The servicing stack update did not apply either (exit code $(Format-ExitCode $SsuExit))." -ForegroundColor DarkYellow
@@ -554,7 +554,7 @@ function Add-UpdateGroup {
         # Once a run, and only where the bar is drawn, since a log reader never sees it.
         if (-not $script:DismProgressNoteShown -and (Get-ConsoleWidth) -gt 0) {
             $script:DismProgressNoteShown = $true
-            Write-HostTimestamp "      Note: DISM's percentage is only a rough guide. Depending on the update it can sit at one figure for many minutes and then jump, so the time beside it keeps counting while DISM works." -ForegroundColor DarkGray
+            Write-HostTimestamp "      Note: DISM's percentage is only a rough guide. Depending on the update it can sit at one figure for many minutes and then jump, so the time beside it keeps counting while DISM works."
         }
 
         # One retry, because transient problems (a locked file, a busy servicing stack) often clear on a second
@@ -574,7 +574,7 @@ function Add-UpdateGroup {
                 return $true
             }
             if ($Output -match '0x800f081e') {
-                Write-HostTimestamp '      Already present / not applicable - skipping.' -ForegroundColor DarkGray
+                Write-HostTimestamp '      Already present / not applicable - skipping.'
                 Add-ServicingResult -Image $ImageLabel -Package (Split-Path -Leaf $Target) -Result 'Skipped' -Detail 'Already present or not applicable (0x800F081E)' -Checkpoints $Checkpoints
                 return $true
             }
@@ -609,7 +609,7 @@ function Add-UpdateGroup {
         $LogErrors = @(Get-DismLogError -Path $DismLog)
         if ($LogErrors.Count -gt 0) {
             Write-HostTimestamp "      The errors DISM logged, last $($LogErrors.Count):" -ForegroundColor DarkYellow
-            foreach ($Line in $LogErrors) { Write-HostLog "        $Line" -ForegroundColor DarkGray }
+            foreach ($Line in $LogErrors) { Write-HostLog "        $Line" }
         }
         $SavedLog = Save-DismLog -Path $DismLog -Package $PackageName -ImageLabel $ImageLabel
         if ($SavedLog) { Write-HostTimestamp "      DISM's full log for this package: $SavedLog" -ForegroundColor DarkYellow }
@@ -621,20 +621,20 @@ function Add-UpdateGroup {
         if ($Unserviceable) {
             $Discarded = 'Tip: DISM reports this image can no longer be serviced, so it will be discarded rather than saved, and this edition keeps exactly what the source media had.'
             if (Test-DismEsuOfflineRefusal -LogPath $DismLog) {
-                Write-HostTimestamp "      $Discarded The update's Extended Security Updates step refuses to run on an offline image (it logged 'ESU: Offline is not supported'), so no ISO can carry this update and other media will not help. Windows installs it once setup finishes, through Windows Update or the after-setup answer file." -ForegroundColor DarkGray
+                Write-HostTimestamp "      $Discarded The update's Extended Security Updates step refuses to run on an offline image (it logged 'ESU: Offline is not supported'), so no ISO can carry this update and other media will not help. Windows installs it once setup finishes, through Windows Update or the after-setup answer file."
             }
             else {
                 # 0x80073713 is ERROR_ADVANCED_INSTALLER_FAILED: one of the update's install-time steps failed.
                 $Cause = if ($Code -eq '0x80073713') { "One of the setup steps the update runs inside the image failed. The DISM log names it on the line with 'Failed execution of queue item Installer'." }
                          else { 'Base media much older than the update, or media that was repacked, is the usual cause.' }
-                Write-HostTimestamp "      $Discarded $Cause An untouched official Microsoft ISO resolves it when the media is at fault." -ForegroundColor DarkGray
+                Write-HostTimestamp "      $Discarded $Cause An untouched official Microsoft ISO resolves it when the media is at fault."
             }
         }
         elseif ($Output -match '0x800f0823') {
-            Write-HostTimestamp '      Tip: 0x800F0823 means the image needs a newer servicing stack than it has, and the one bundled in this update did not take. Base media several years older than the update is the usual cause. Try newer media, or apply the standalone SSU for this release to the mounted image by hand before re-running.' -ForegroundColor DarkGray
+            Write-HostTimestamp '      Tip: 0x800F0823 means the image needs a newer servicing stack than it has, and the one bundled in this update did not take. Base media several years older than the update is the usual cause. Try newer media, or apply the standalone SSU for this release to the mounted image by hand before re-running.'
         }
         elseif ($Output -match '0x80070228') {
-            Write-HostTimestamp "      Tip: this is typically the base image, not the update. The install.wim files did not match their manifests, which is common with repacked or UUP-built ISOs. A clean official Microsoft ISO usually resolves it." -ForegroundColor DarkGray
+            Write-HostTimestamp "      Tip: this is typically the base image, not the update. The install.wim files did not match their manifests, which is common with repacked or UUP-built ISOs. A clean official Microsoft ISO usually resolves it."
         }
         return $false
     }
@@ -682,7 +682,7 @@ function Add-ImageDrivers {
 
     Write-HostTimestamp "      $Added added, $($Failed.Count) rejected. A rejected driver is usually unsigned, built for another architecture, or not a real driver package." -ForegroundColor Yellow
     if (-not $AllowUnsignedDrivers) {
-        Write-HostTimestamp '      Pass -AllowUnsignedDrivers if the rejected ones are unsigned and you accept that risk.' -ForegroundColor DarkGray
+        Write-HostTimestamp '      Pass -AllowUnsignedDrivers if the rejected ones are unsigned and you accept that risk.'
     }
     $Result = if ($Added -gt 0) { 'Partial' } else { 'Failed' }
     Add-ServicingResult -Image $ImageLabel -Package "$($InfFiles.Count) driver package(s)" -Result $Result -Detail "$Added added, rejected: $(($Failed | Select-Object -First 10) -join ', ')"
@@ -696,7 +696,7 @@ function Remove-ImageResidue {
     param([Parameter(Mandatory)][string]$MountDir)
 
     if (-not $StripImageResidue) {
-        Write-HostTimestamp '    Leaving the servicing residue in place (pass -StripImageResidue to remove it).' -ForegroundColor DarkGray
+        Write-HostTimestamp '    Leaving the servicing residue in place (pass -StripImageResidue to remove it).'
         return
     }
 
@@ -781,7 +781,7 @@ function Remove-ImageResidue {
         Write-HostTimestamp "      Could not fully remove $($Stuck -join ', '). The image's permissions denied it, so what is left will ship in the ISO." -ForegroundColor Yellow
     }
     if ($FreedMB -ge 1) {
-        Write-HostTimestamp ('    Stripped {0:N0} MB of servicing residue (logs and temp files Windows recreates on first boot).' -f $FreedMB) -ForegroundColor DarkGray
+        Write-HostTimestamp ('    Stripped {0:N0} MB of servicing residue (logs and temp files Windows recreates on first boot).' -f $FreedMB)
     }
 
     # Totalled across every image so the tattoo can state what this build removed.
@@ -864,7 +864,7 @@ function Save-ServicedWinReImage {
     }
     catch {
         # Not fatal, the remaining editions just each do the work themselves.
-        Write-HostTimestamp "      The serviced recovery image could not be kept for the other editions: $($_.Exception.Message)" -ForegroundColor DarkGray
+        Write-HostTimestamp "      The serviced recovery image could not be kept for the other editions: $($_.Exception.Message)"
     }
 }
 

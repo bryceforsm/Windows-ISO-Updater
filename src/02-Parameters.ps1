@@ -234,7 +234,10 @@ param(
     [Parameter(HelpMessage = 'Ask for the -TaskUsername password at startup without echoing it. Added automatically when the script relaunches itself elevated, so the password never appears on a command line')]
     [switch]$PromptTaskPassword,
 
-    [switch]$SkipInteractive # Skips the interactive confirmation prompt
+    [switch]$SkipInteractive, # Skips the interactive confirmation prompt
+
+    [Parameter(HelpMessage = 'Skip checking GitHub for a newer release of this script at startup. The check waits a few seconds at most, and when GitHub cannot be reached it is noted only in the log')]
+    [switch]$SkipVersionCheck
 )
 #endregion
 

@@ -95,13 +95,13 @@ if ($ResolvedExtraFiles) {
                 Write-HostTimestamp "    \$Relative ($SizeKB KB) REPLACED" -ForegroundColor Yellow
             }
             else {
-                Write-HostTimestamp "    \$Relative ($SizeKB KB)" -ForegroundColor DarkGray
+                Write-HostTimestamp "    \$Relative ($SizeKB KB)"
             }
         }
         Write-HostTimestamp "  Copied $($script:ExtraFilesCopied) file(s) to the root of the media." -ForegroundColor Green
 
         if ($script:ExtraFileOverwrites.Count -eq 0) {
-            Write-HostTimestamp '  Nothing the media already had was replaced.' -ForegroundColor DarkGray
+            Write-HostTimestamp '  Nothing the media already had was replaced.'
             return
         }
 

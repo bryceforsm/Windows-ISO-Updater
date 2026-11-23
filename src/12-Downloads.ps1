@@ -66,7 +66,7 @@ function Copy-LargeFile {
     }
     $Elapsed = (Get-Date) - $Started
     $SpeedMB = if ($Elapsed.TotalSeconds -gt 0) { ($SourceLength / 1MB) / $Elapsed.TotalSeconds } else { 0 }
-    Write-HostTimestamp ('  Copied {0:N2} GB in {1} ({2:N0} MB/s).' -f ($SourceLength / 1GB), (Format-Duration $Elapsed), $SpeedMB) -ForegroundColor DarkGray
+    Write-HostTimestamp ('  Copied {0:N2} GB in {1} ({2:N0} MB/s).' -f ($SourceLength / 1GB), (Format-Duration $Elapsed), $SpeedMB)
 }
 
 # Whether BITS can transfer anything for this logon session. BITS only moves a job while its owner is logged
@@ -99,7 +99,7 @@ function Get-FileDownload {
     $UseBits = [bool](Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue)
     if ($UseBits -and -not (Test-BitsUsable)) {
         $UseBits = $false
-        Write-HostTimestamp '  BITS only runs for a signed-in user, and this run is a scheduled task for a user who is not signed in, so the file is downloaded directly.' -ForegroundColor DarkGray
+        Write-HostTimestamp '  BITS only runs for a signed-in user, and this run is a scheduled task for a user who is not signed in, so the file is downloaded directly.'
     }
     if ($UseBits) {
         $Job = $null

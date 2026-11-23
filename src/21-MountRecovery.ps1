@@ -108,7 +108,7 @@ Remove-Item -LiteralPath '$EscCleanupScript' -Force
     }
 
     Write-HostTimestamp "    Registered the scheduled task '$CleanupTaskName' to clear it as SYSTEM at the next boot." -ForegroundColor Green
-    Write-HostTimestamp "      It strips the reparse point, deletes the orphaned WIMMount registry entry, then takes ownership and deletes the folder, logging to $CleanupLog." -ForegroundColor DarkGray
+    Write-HostTimestamp "      It strips the reparse point, deletes the orphaned WIMMount registry entry, then takes ownership and deletes the folder, logging to $CleanupLog."
     return $true
 }
 
@@ -179,7 +179,7 @@ function Dismount-ImageDiscard {
     $Foreign = @(Get-ForeignBrokenMount)
     if ($Foreign.Count -gt 0) {
         Write-HostTimestamp "      Not running /Cleanup-Mountpoints: it would also release $($Foreign.Count) broken mount(s) outside $WorkRoot." -ForegroundColor Yellow
-        foreach ($Other in $Foreign) { Write-HostTimestamp "        $($Other.Path)" -ForegroundColor DarkGray }
+        foreach ($Other in $Foreign) { Write-HostTimestamp "        $($Other.Path)" }
         Write-HostTimestamp '        Clear those yourself, or run this build with a -WorkPath nothing else is using.' -ForegroundColor Yellow
         return $false
     }
@@ -286,7 +286,7 @@ function Reset-MountDirectory {
     $ForeignBroken = @(Get-ForeignBrokenMount)
     if ($ForeignBroken.Count -gt 0) {
         Write-HostTimestamp "    Skipping the corrupt mount point cleanup: $($ForeignBroken.Count) broken mount(s) outside $WorkRoot would be released too." -ForegroundColor Yellow
-        foreach ($Other in $ForeignBroken) { Write-HostTimestamp "      $($Other.Path)" -ForegroundColor DarkGray }
+        foreach ($Other in $ForeignBroken) { Write-HostTimestamp "      $($Other.Path)" }
     }
     else {
         try { Clear-WindowsCorruptMountPoint -ErrorAction SilentlyContinue | Out-Null } catch { }

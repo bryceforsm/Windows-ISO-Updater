@@ -16,7 +16,7 @@ Invoke-Task -Description "Recompiling the bootable ISO to $BuildIsoPath ..." -Sc
     $OscdimgArgs = @('-m', '-o', '-u2', '-udfver102', "-l$IsoVolumeLabel")
     if ($BootArg) { $OscdimgArgs += "-bootdata:$BootArg" }
     $OscdimgArgs += @($ExtractDir, $BuildIsoPath)
-    Write-HostTimestamp "  Volume label: $IsoVolumeLabel" -ForegroundColor DarkGray
+    Write-HostTimestamp "  Volume label: $IsoVolumeLabel"
 
     # Run oscdimg and wait for it to finish, then verify it actually produced the ISO.
     Write-HostTimestamp "  Running: `"$Oscdimg`" $($OscdimgArgs -join ' ')"
@@ -198,20 +198,22 @@ if ($script:StepTimings.Count -gt 0) {
     }
     $Slowest = $script:StepTimings | Sort-Object -Property Duration -Descending | Select-Object -First 1
     Write-Host ''
-    Write-HostTimestamp "Longest step: $($Slowest.Description) ($(Format-Duration $Slowest.Duration))" -ForegroundColor DarkGray
+    Write-HostTimestamp "Longest step: $($Slowest.Description) ($(Format-Duration $Slowest.Duration))"
 }
 Write-HostTimestamp "Total run time: $(Format-Duration $TotalElapsed) (started $($script:ScriptStartTime.ToString('HH:mm:ss')), finished $((Get-Date).ToString('HH:mm:ss')))" -ForegroundColor Cyan
 Write-Host $LineBreak
 
-Write-HostTimestamp 'Done. Your updated Windows installation ISO is ready:' -ForegroundColor Green
-Write-HostTimestamp "  $OutputIsoPath" -ForegroundColor Green
-if ($script:RecoveryIsoOutput) {
-    Write-HostTimestamp 'Recovery ISO:' -ForegroundColor Green
-    Write-HostTimestamp "  $script:RecoveryIsoOutput" -ForegroundColor Green
-}
-if (-not $SkipTattoo) {
-    Write-HostTimestamp '  Open \WISO-Build on the ISO for the record of how it was built.' -ForegroundColor DarkGray
-}
+# What people copy out of a finished run, in one place.
+$Summary = [ordered]@{ 'ISO' = $OutputIsoPath }
+$FinishedIso = Get-Item -LiteralPath $OutputIsoPath -ErrorAction SilentlyContinue
+if ($FinishedIso) { $Summary['Size'] = '{0:N2} GB' -f ($FinishedIso.Length / 1GB) }
+if ($script:FinalBuildString) { $Summary['Build'] = "$script:FinalBuildString" }
+$SummaryEditions = @($InstallImages | Where-Object { $_ -and $KeepIndexes -contains [int]$_.ImageIndex } | ForEach-Object { "$($_.ImageName)" })
+if ($SummaryEditions.Count -gt 0) { $Summary['Editions'] = $SummaryEditions -join ', ' }
+if ($script:RecoveryIsoOutput) { $Summary['Recovery ISO'] = $script:RecoveryIsoOutput }
+$Summary['Run time'] = Format-Duration $TotalElapsed
+if (-not $SkipTattoo) { $Summary['Build record'] = '\WISO-Build on the ISO' }
+Write-SummaryBox -Title 'Done. Your updated Windows installation ISO is ready' -Rows $Summary
 Write-Host ''
 # Every package that failed on any image, boot.wim and the recovery image included, so the warnings that scrolled
 # past during servicing are not the only place a failure shows.
@@ -231,6 +233,7 @@ Write-Host $LineBreak
 
 Remove-WorkPathDefenderExclusion
 Write-HostTimestamp 'Windows ISO Updater script finished.' -ForegroundColor Green
+Complete-ConsoleRun
 if (-not $Unattended -and -not $SkipInteractive) {
     Read-Host -Prompt 'Press enter to exit'
 }
@@ -239,5 +242,5 @@ if (-not $Unattended -and -not $SkipInteractive) {
 
 #region End Logging
 # Stop logging
-Stop-Transcript
+Stop-RunLogging
 #endregion
