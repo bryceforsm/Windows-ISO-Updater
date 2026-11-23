@@ -163,8 +163,12 @@ function Show-WimSizeComparison {
     if ($script:WimSizes.Count -eq 0) { return }
 
     $Rows = @(foreach ($Wim in $script:WimSizes) {
-        # -CompressEsd renames install.wim on the way out, so show both names rather than a misleading one.
-        $Name = if ($Wim.AfterName -ne $Wim.BeforeName) { "$($Wim.Label) -> $($Wim.AfterName)" } else { $Wim.Label }
+        # Media that ships install.esd starts as one, and -CompressEsd ends as one, so a row that changes format
+        # names both files rather than one misleading name.
+        $Name =
+            if ($Wim.AfterName -ne $Wim.BeforeName) { "$($Wim.BeforeName) -> $($Wim.AfterName)" }
+            elseif ($Wim.BeforeName -like '*.esd') { $Wim.BeforeName }
+            else { $Wim.Label }
         [pscustomobject]@{
             Name   = $Name
             Before = $Wim.Before / 1MB
@@ -180,13 +184,19 @@ function Show-WimSizeComparison {
     }
 
     $NameWidth = ($Rows | ForEach-Object { $_.Name.Length } | Measure-Object -Maximum).Maximum
-    Write-Host ''
     Write-HostTimestamp 'Image sizes, as extracted and as shipped:' -ForegroundColor Cyan
     foreach ($Row in $Rows) {
         if ($Row.Name -eq 'Total') { Write-HostLog ('  ' + ('-' * ($NameWidth + 42))) }
         $Change = '{0}{1:N0} MB' -f $(if ($Row.Delta -ge 0) { '+' } else { '-' }), [math]::Abs($Row.Delta)
         Write-HostLog ("  {0,-$NameWidth}  {1,9:N0} MB -> {2,9:N0} MB  {3,10}" -f $Row.Name, $Row.Before, $Row.After, $Change)
     }
+    # An install.esd is far more tightly compressed than the install.wim it is turned into, so on ESD media most
+    # of the difference is the change of format, and the editions left out of the export, rather than the updates.
+    if (@($script:WimSizes | Where-Object { $_.BeforeName -like '*.esd' -and $_.AfterName -like '*.wim' }).Count -gt 0) {
+        Write-HostLog '  The media shipped install.esd, which is compressed far more tightly than install.wim, so most of that change is the format. -CompressEsd ships install.esd again.'
+    }
+    # Spaced after rather than before, so the next step's heading does not follow straight on.
+    Write-Host $LineBreak
 }
 
 # Records the build of an edition's recovery image. As with the sizes, the first call under a label is
@@ -212,12 +222,13 @@ function Show-WinReVersions {
     if ($script:WinReVersions.Count -eq 0) { return }
 
     $NameWidth = ($script:WinReVersions | ForEach-Object { $_.Label.Length } | Measure-Object -Maximum).Maximum
-    Write-Host ''
     Write-HostTimestamp 'Recovery image (WinRE) build, per edition:' -ForegroundColor Cyan
     foreach ($Entry in $script:WinReVersions) {
         $Change = if ($Entry.After -ne $Entry.Before) { "$($Entry.Before) -> $($Entry.After)" } else { "$($Entry.After) (unchanged)" }
         Write-HostLog ("  {0,-$NameWidth}  {1}" -f $Entry.Label, $Change)
     }
+    # Spaced after rather than before, so it sits under the step above it like the step's own lines do.
+    Write-Host $LineBreak
 }
 
 #endregion

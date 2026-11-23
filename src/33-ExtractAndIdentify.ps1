@@ -93,6 +93,9 @@ $script:EsdPreTrimmed = $false
 $script:SourceMediaEditions = @()
 $script:SourceMediaDropped = @()
 if (-not (Test-Path -LiteralPath $InstallWimExtracted) -and (Test-Path -LiteralPath $InstallEsdExtracted)) {
+    # The starting size is the install.esd the media shipped, so the comparison at the end measures the ISO
+    # against the media it came from. The sample after the conversion below then only updates the finishing size.
+    Add-WimSizeSample -Label 'install.wim' -Path $InstallEsdExtracted
     Invoke-Task -Description 'The media uses install.esd - converting it to an editable install.wim...' -ScriptBlock {
         $Images = @(Get-WindowsImage -ImagePath $InstallEsdExtracted -ErrorAction Stop)
         $script:SourceMediaEditions = @($Images | ForEach-Object { [ordered]@{ Index = [int]$_.ImageIndex; Name = "$($_.ImageName)" } })
@@ -132,8 +135,8 @@ if (-not (Test-Path -LiteralPath $InstallWimExtracted)) {
     exit 1
 }
 
-# The starting sizes for the comparison at the end. Taken after any install.esd conversion, because that
-# WIM is the one servicing actually works on.
+# The starting sizes for the comparison at the end. On install.esd media the starting size was already taken
+# from the ESD above, so this only records where the conversion left it.
 Add-WimSizeSample -Label 'install.wim' -Path $InstallWimExtracted
 Add-WimSizeSample -Label 'boot.wim' -Path $BootWim
 

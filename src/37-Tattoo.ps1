@@ -143,7 +143,7 @@ if (-not $SkipTattoo) {
                     })
                 }
                 ImageSizes         = @($script:WimSizes | ForEach-Object {
-                    [ordered]@{ Image = $_.Label; ShippedAs = $_.AfterName; BeforeMB = [math]::Round($_.Before / 1MB); AfterMB = [math]::Round($_.After / 1MB) }
+                    [ordered]@{ Image = $_.Label; StartedAs = $_.BeforeName; ShippedAs = $_.AfterName; BeforeMB = [math]::Round($_.Before / 1MB); AfterMB = [math]::Round($_.After / 1MB) }
                 })
             }
             Drivers     = if ($ResolvedDriverPath) {
