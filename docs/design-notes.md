@@ -62,6 +62,39 @@ It matters most for scheduled tasks. A blocked link request in an unattended run
 
 The one thing to watch is that a source ISO **ages**. It never stops working, because the cumulative update is cumulative, but media several years older than the update can run into `0x800F0823` (*the image needs a newer servicing stack*). Refresh the source ISO once a year or so, and the drift takes care of itself.
 
+## Why Update an ISO Instead of Building One With UUP dump
+
+I'm aware of [UUP dump](https://uupdump.net/), and it definitely has its place. It's a different answer to a similar problem, so it's worth being clear about where each one fits.
+
+UUP dump builds an ISO from scratch out of the files Windows Update hands out. You pick a build, a language and the editions on its website, and it gives you a small package that downloads those files from Microsoft's servers and assembles them into an ISO with a community converter script, optionally with the latest updates already integrated. This tool goes the other way. It starts from an ISO you already have and updates that ISO in place.
+
+| | This tool | UUP dump |
+| --- | --- | --- |
+| **Starting point** | An ISO you already have | Nothing. It builds the ISO from Windows Update's files |
+| **Media it can work with** | Any Windows 10, 11 or Server ISO: retail, Volume Licensing, Evaluation Center, Visual Studio subscriptions, LTSC and IoT Enterprise LTSC | Whatever Windows Update serves: mainly the consumer and business releases, plus Insider builds |
+| **What decides which files are used** | This script, reading the Microsoft Update Catalog | The UUP dump website |
+| **What assembles the ISO** | DISM and Microsoft's `oscdimg.exe`, run by one script you can read | A community converter script and the tools it brings with it |
+| **Running on a schedule** | Built in: scheduled tasks, profiles, build stamps that skip a run when nothing is new, `-CheckOnly` exit codes and `-AutoClean` | Possible, but you build the automation around it yourself |
+| **What it adds** | Drivers, an answer file, your own files, edition trimming, and a record of the build on the ISO | Language and edition choices, including editions the release can be upgraded to |
+| **Builds Microsoft hasn't published as an ISO** | No | Yes, including Insider builds and new releases before their ISO appears |
+
+**It keeps the media you already trust.** Plenty of organisations have an approved source for install media, usually Volume Licensing or a Visual Studio subscription, and want exactly that media, just current. This tool updates that ISO and keeps its editions, language and type of media. UUP dump makes a new ISO instead, and it can't make every kind. Windows Update doesn't hand out LTSC, and released Windows Server builds mostly aren't served that way either, so for those, starting from the real ISO is the only route.
+
+**Every file has one source.** Everything a default run downloads comes from Microsoft: the updates from the Update Catalog and `oscdimg.exe` from the Microsoft symbol server, checked against a known hash. The only other thing it contacts is GitHub, to ask for the latest release number of this script, and `-SkipVersionCheck` turns that off. The one exception that downloads code, `-UseFido`, is off unless you ask for it and is pinned by hash. UUP dump also fetches its files from Microsoft, but which files to fetch comes from a third-party website, and the ISO is put together by community scripts. For a home lab that's usually fine. For media you deploy across a company, being able to say where every piece came from, and point at a single script anyone can read, is a lot easier to defend.
+
+**It's built to be left alone.** This tool assumes it'll run from a scheduled task with nobody watching. The build stamp means most runs find nothing new and stop in a minute or two, and a rebuild only happens when Microsoft actually publishes something. You can script UUP dump, but that whole loop of checking, deciding, rebuilding and cleaning up is yours to write.
+
+**It updates the parts that get missed.** A run patches Windows Setup (`boot.wim`) and the recovery environment, adds the .NET update and Setup's dynamic update, and leaves a `\WISO-Build` record on the ISO saying exactly what went in. It also knows which releases have entered Extended Security Updates, whose updates won't install into an offline image, and stops at the last one that does instead of producing a broken build.
+
+**Where UUP dump is the better choice:**
+
+- **You don't have an ISO to start from**, or can't easily get the one you want. This tool needs one, apart from the consumer ISOs `-UseFido` and `-UseMct` can fetch.
+- **You want a build Microsoft doesn't publish as an ISO**, such as an Insider build, or a new feature update before its ISO comes out.
+- **You want an unusual combination** of languages or editions in one ISO.
+- **It's a one-off for your own machine**, where getting the newest build quickly matters more than where every piece came from.
+
+The two aren't really rivals. UUP dump is great for getting a particular build onto a machine, especially one Microsoft hasn't packaged yet. This tool is for keeping the install media you already rely on current, the same way every month, without anyone having to remember to do it.
+
 ## How the Already-Patched Check Works
 
 Integrating a cumulative update is the expensive part of a run (mount, apply, component cleanup, re-export), so the script checks whether the image already has that update before downloading it. Re-applying a present update is harmless (DISM returns `0x800f081e`, "not applicable", and the script treats that as success), but it costs the better part of an hour.

@@ -27,7 +27,9 @@
 </p>
 
 <!-- /github-only -->
-Installing Windows from updated media saves time by eliminating large post-installation update downloads.
+An ISO from Microsoft is only as current as the day it was made. Install from one a few months later and the new machine spends its first hour downloading updates, installing them and restarting, sometimes more than once. This tool fixes the media instead. Give it an official ISO and it builds a new one with the latest updates already inside, so Windows is current the moment Setup finishes.
+
+It's a single PowerShell script with a batch file to start it. There's nothing to install, and you can read every line of what it does before you run it.
 
 ![Console output of a Windows 11 build: the ISO is extracted, the latest cumulative update is downloaded and applied, and a new bootable ISO is written](docs/images/console.svg)
 
@@ -46,18 +48,23 @@ flowchart LR
     class A,F ends
 ```
 
-## Key Features
+The updates don't just go into the Windows image. Windows Setup (`boot.wim`) and the recovery environment get theirs too, which is easy to miss when you do this by hand, and the .NET update and Setup's dynamic update come along by default.
 
-* 🛡️ **Safe Execution**: All servicing happens inside a working folder (`C:\WISO-Work` by default), never on the running Windows. Outside that folder it only changes the host when asked to, with `-InstallAdk`, `-RegisterScheduledTask` or `-ExcludeWorkPathFromDefender` (Defender exclusions for the folders DISM works in, removed when the run ends), or if a mount cannot be released, when it registers a boot task that clears the mount and deletes itself.
-* 🔒 **Official Sources by Default**: Downloads packages directly from Microsoft endpoints over HTTPS. The one exception is the optional `-UseFido` ISO download, which fetches a community helper from GitHub, pinned by hash.
-* 🧰 **No Manual ADK Setup Needed**: Automatically fetches a verified copy of `oscdimg.exe` from Microsoft servers to compile the media.
-* 🔁 **Hands-Off and Repeatable**: Run it from a [scheduled task](docs/scheduled-runs.md) or a [JSON profile](docs/usage.md#using-a-json-profile). A build stamp records what went into each ISO, so a run where nothing has changed finishes in a minute or two.
-* 🧩 **Media Your Way**: Choose which editions to keep, and add an [answer file](docs/unattended-installs.md), [drivers](docs/usage.md#adding-drivers) or [your own files](docs/usage.md#adding-your-own-files-to-the-iso).
-* 🧾 **A Record on Every ISO**: Each ISO carries a `\WISO-Build` folder recording what it was built from and which updates went in ([details](docs/reference.md#the-build-record-on-the-iso)).
-* 🖥️ **Windows Server Support**: Compatible with Windows Server media, detected automatically from the image.
-* 🔐 **Secure Boot Ready**: Microsoft's signed boot files are kept as they are, so the ISO boots with Secure Boot on ([writing it to USB](docs/usage.md#writing-the-iso-to-a-usb-stick)).
+## What You Get
 
----
+**Your PC is left alone.** All the work happens in a working folder, `C:\WISO-Work` unless you choose another, and never on the Windows you're running. The tool only touches the rest of the system when you ask it to: installing the ADK with `-InstallAdk`, creating a scheduled task with `-RegisterScheduledTask`, or excluding its folders from Defender with `-ExcludeWorkPathFromDefender`, which it undoes when the run ends. The one exception is a stuck DISM mount it can't release, which it clears up with a one-time task at the next restart.
+
+**Everything comes from Microsoft.** Updates are downloaded from Microsoft over HTTPS. So is `oscdimg.exe`, the tool that writes the ISO, which is checked against a known hash, so you don't need the Windows ADK. Each run also asks GitHub whether a newer version of this tool is out, which `-SkipVersionCheck` turns off. The only code fetched from anywhere else is for the optional `-UseFido` ISO download, a community script from GitHub pinned to a specific version and hash.
+
+**It runs on its own.** Point a [scheduled task](docs/scheduled-runs.md) at it, or keep your settings in a [JSON profile](docs/usage.md#using-a-json-profile). Each build leaves a stamp of what went into it, so when Microsoft hasn't published anything new, the next run notices in a minute or two and stops.
+
+**The ISO is yours to shape.** Keep only the editions you need, and add an [answer file](docs/unattended-installs.md), [drivers](docs/usage.md#adding-drivers) or [any files of your own](docs/usage.md#adding-your-own-files-to-the-iso).
+
+**Every ISO remembers how it was made.** A `\WISO-Build` folder on the media records the source ISO, the updates that went in and the settings used ([details](docs/reference.md#the-build-record-on-the-iso)).
+
+**Server media works too.** Windows Server ISOs are recognised from the image, with no extra settings.
+
+**Secure Boot still works.** Microsoft's signed boot files are left exactly as they are, so the ISO boots with Secure Boot on, from a DVD, a VM or a [USB stick](docs/usage.md#writing-the-iso-to-a-usb-stick).
 
 ## Quick Start
 
@@ -70,84 +77,82 @@ flowchart LR
 5. Check the summary of what the build will do, then type `Y` to start it.
 6. When the build finishes, the updated ISO is in `C:\WISO-Work\Output`.
 
-To speed up the update and shrink the ISO, the tool removes the editions you are unlikely to need. On client media it keeps Enterprise, Pro and Home, and on Server media it keeps one edition, Standard if the ISO has it. Use `-KeepAllEditions` to keep every edition, or `-KeepEditions` to pick which ones stay.
+By default it keeps the editions most people actually install, which also makes the build faster and the ISO smaller. On client media that's Enterprise, Pro and Home. On Server media it's one edition, Standard if the ISO has it. Add `-KeepAllEditions` to keep everything, or `-KeepEditions` to pick.
 
 > [!TIP]
-> A build takes a while, mostly in DISM. [Speeding Up a Build](docs/usage.md#speeding-up-a-build) covers what makes the biggest difference, starting with how many editions you keep.
+> A build takes a while, and most of that is DISM. [Speeding Up a Build](docs/usage.md#speeding-up-a-build) covers what helps most, starting with how many editions you keep.
 
-### Command Examples
+### A Few Examples
 
-**Unattended Custom Build:**
+Build Windows 11 Pro from a specific ISO without any questions:
+
 ```bat
 .\Run-Windows-ISO-Updater.bat -IsoPath "C:\ISOs\Win11.iso" -Edition "Windows 11 Pro" -Unattended
 ```
 
-**Repeatable Build from a [JSON Profile](docs/usage.md#using-a-json-profile):**
+Build from settings you've saved in a [JSON profile](docs/usage.md#using-a-json-profile):
+
 ```bat
 .\Run-Windows-ISO-Updater.bat -ConfigPath "D:\Profiles\win11.json"
 ```
 
-**Windows Server Build:**
+Update a Windows Server ISO:
+
 ```bat
 .\Run-Windows-ISO-Updater.bat -IsoPath "C:\ISOs\Server2025.iso"
 ```
 
----
+## What You Need
 
-## Requirements
+* Windows 10, Windows Server 2016 or newer to run it on
+* PowerShell 5.1, which comes with Windows. The batch file uses PowerShell 7 instead when it's installed.
+* An administrator account
+* An internet connection to download the updates
+* About 50 GB free on a local disk for the working folder. A network share or a cloud-synced folder won't work ([why](docs/reference.md#keep-the-working-folder-on-a-local-disk)).
 
-* Windows 10, Windows Server 2016, or newer
-* PowerShell 5.1 or newer
-* Administrator permissions
-* Active internet connection for update retrieval
-* Sufficient local storage space (at least 50 GB free recommended)
-* A local disk for the working folder, not a network share or a cloud-synced folder ([why](docs/reference.md#keep-the-working-folder-on-a-local-disk))
-
----
-
-## Documentation Links
+## Documentation
 
 <!-- github-only -->
-For search and easier navigation, read the documentation at [bryceforsm.github.io/Windows-ISO-Updater](https://bryceforsm.github.io/Windows-ISO-Updater/).
+The same documentation is on [bryceforsm.github.io/Windows-ISO-Updater](https://bryceforsm.github.io/Windows-ISO-Updater/), with search.
 
 <!-- /github-only -->
 | Guide | What it covers |
 | --- | --- |
-| 📘 [Usage Guide](docs/usage.md) | Running the tool, JSON profiles, Server and LTSC media, editions, drivers, your own files, speeding up a build |
-| ⚙️ [Command-Line Parameters](docs/parameters.md) | Every parameter and what it does |
-| ⏰ [Scheduled Automation](docs/scheduled-runs.md) | Monthly builds from a scheduled task, build stamps and housekeeping |
-| 🤖 [Unattended Setups](docs/unattended-installs.md) | Answer files, and the example that finishes the updates an ISO cannot carry |
-| 🧠 [Architecture and Design Details](docs/design-notes.md) | Why the tool works the way it does |
-| 🔧 [Technical Reference](docs/reference.md) | Each step of a run, the build record, downloads, disk space and logging |
-| 📝 [Change Log](CHANGELOG.md) | What changed in each release |
+| [Usage Guide](docs/usage.md) | Running the tool, JSON profiles, Server and LTSC media, editions, drivers, your own files, and speeding up a build |
+| [Command-Line Parameters](docs/parameters.md) | Every parameter and what it does |
+| [Scheduled Automation](docs/scheduled-runs.md) | Monthly builds from a scheduled task, build stamps and cleaning up old files |
+| [Unattended Setups](docs/unattended-installs.md) | Answer files, and an example that finishes the updates an ISO can't carry |
+| [Architecture and Design Details](docs/design-notes.md) | Why the tool works the way it does |
+| [Technical Reference](docs/reference.md) | Each step of a run, the build record, downloads, disk space and logging |
+| [Change Log](CHANGELOG.md) | What changed in each release |
 
-## Reporting Issues
+## Reporting a Problem
 
-For any problem with this tool, please [submit a GitHub issue](https://github.com/bryceforsm/Windows-ISO-Updater/issues).
+If something goes wrong, please [open a GitHub issue](https://github.com/bryceforsm/Windows-ISO-Updater/issues).
 
-**Attach the logs from the run.** They show what the tool found, chose and did at each step, so an issue that includes them can usually be fixed without a round of follow-up questions. They are in the `Logs` folder under the working folder (`<WorkPath>\Logs`, or `-LogPath` if you set it). Attach these files from the run that went wrong:
+**Please attach the logs from that run.** They show what the tool found, what it chose and what happened at each step, so with them most problems can be fixed without a round of questions. They're in the `Logs` folder in the working folder (`<WorkPath>\Logs`, or wherever `-LogPath` points). From the run that went wrong, attach:
 
 * `Windows-ISO-Updater_<date>_<time>.log`, the main log
 * `Windows-ISO-Updater_<date>_<time>_console.txt`, everything that appeared on screen
-* The `Windows-ISO-Updater_<date>_<time>_DISM` folder, if there is one. It is only created when an update failed to apply.
+* The `Windows-ISO-Updater_<date>_<time>_DISM` folder, if there is one. It only exists when an update failed to apply.
 
-Please also include:
+It also helps to know:
 
-* The command you ran, or the JSON profile if you used `-ConfigPath`
+* The command you ran, or your JSON profile if you used `-ConfigPath`
 * Whether you started it from Windows PowerShell, PowerShell 7 or the `.bat` file
-* Where the source ISO came from, for example the Microsoft website, the Evaluation Center or Visual Studio subscriptions
+* Where the ISO came from, for example the Microsoft website, the Evaluation Center or a Visual Studio subscription
 
 > [!NOTE]
-> The logs record the computer name, your Windows user name, the make and model of the computer, and the full paths the run used. Look them over and replace anything you would rather not post before attaching them. See [Logging](docs/reference.md#logging) for what each file contains.
+> The logs include the computer name, your Windows user name, the computer's make and model, and the full paths the run used. Read through them and replace anything you'd rather not share before you attach them. [Logging](docs/reference.md#logging) describes what each file contains.
 
 Issues and pull requests with no activity for 90 days are marked as stale and closed 14 days later. Any comment keeps one open.
 
-## Feature Requests
+## Ideas and Requests
 
-Ideas are welcome. [Open a GitHub issue](https://github.com/bryceforsm/Windows-ISO-Updater/issues) that describes what you want to do and why the tool does not cover it today. An example of the command or setup you have in mind helps.
+Ideas are welcome. [Open a GitHub issue](https://github.com/bryceforsm/Windows-ISO-Updater/issues) that says what you're trying to do and why the tool doesn't cover it yet. An example of the command or setup you have in mind helps a lot.
 
-This tool is built to run hands off, from a single command or a scheduled task, and is kept tightly scoped to automating updated install media. Requests are weighed against that. Features that need someone at the screen, such as a graphical interface, may not be added, because they would make the tool more complex to use and to maintain without helping the automated builds it exists for.
+The tool is meant to run without anyone watching, from one command or a scheduled task, and it sticks to one job: keeping install media up to date. Requests are weighed against that. Something that needs a person at the screen, like a graphical interface, probably won't be added. It would make the tool harder to use and maintain without helping the automated builds it exists for.
 
 ## License
 
-Distributed under the [MIT License](LICENSE). Third-party utilities and Microsoft updates fetched during runtime remain governed by their respective vendor terms.
+The tool is released under the [MIT License](LICENSE). The Microsoft updates and third-party tools it downloads while running are covered by their own licenses.
