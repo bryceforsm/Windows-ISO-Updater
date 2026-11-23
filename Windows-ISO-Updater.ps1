@@ -1,6 +1,6 @@
 # GENERATED FILE. Edit the files in src\ and run tools\Build-Script.ps1, because changes made here are overwritten.
 # Windows ISO Updater
-# Version: 2026.11.22.7   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
+# Version: 2026.11.22.8   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
 #
 #region Script overview
 # This script builds a fully up-to-date ("slipstreamed") Windows 11, Windows 10 or Windows Server
@@ -323,7 +323,7 @@ $script:ScriptPath = $PSCommandPath
 
 # Kept in step with the header comment by tools\Update-Version.ps1, and shown in the log and recorded in
 # the build stamp so a finished ISO can be traced back to the exact script that built it.
-$ScriptVersion = '2026.11.22.7'
+$ScriptVersion = '2026.11.22.8'
 
 # A scheduled run has nobody to answer a prompt.
 if ($Scheduled) {
@@ -5400,8 +5400,12 @@ function Show-WimSizeComparison {
     if ($script:WimSizes.Count -eq 0) { return }
 
     $Rows = @(foreach ($Wim in $script:WimSizes) {
-        # -CompressEsd renames install.wim on the way out, so show both names rather than a misleading one.
-        $Name = if ($Wim.AfterName -ne $Wim.BeforeName) { "$($Wim.Label) -> $($Wim.AfterName)" } else { $Wim.Label }
+        # Media that ships install.esd starts as one, and -CompressEsd ends as one, so a row that changes format
+        # names both files rather than one misleading name.
+        $Name =
+            if ($Wim.AfterName -ne $Wim.BeforeName) { "$($Wim.BeforeName) -> $($Wim.AfterName)" }
+            elseif ($Wim.BeforeName -like '*.esd') { $Wim.BeforeName }
+            else { $Wim.Label }
         [pscustomobject]@{
             Name   = $Name
             Before = $Wim.Before / 1MB
@@ -5417,13 +5421,19 @@ function Show-WimSizeComparison {
     }
 
     $NameWidth = ($Rows | ForEach-Object { $_.Name.Length } | Measure-Object -Maximum).Maximum
-    Write-Host ''
     Write-HostTimestamp 'Image sizes, as extracted and as shipped:' -ForegroundColor Cyan
     foreach ($Row in $Rows) {
         if ($Row.Name -eq 'Total') { Write-HostLog ('  ' + ('-' * ($NameWidth + 42))) }
         $Change = '{0}{1:N0} MB' -f $(if ($Row.Delta -ge 0) { '+' } else { '-' }), [math]::Abs($Row.Delta)
         Write-HostLog ("  {0,-$NameWidth}  {1,9:N0} MB -> {2,9:N0} MB  {3,10}" -f $Row.Name, $Row.Before, $Row.After, $Change)
     }
+    # An install.esd is far more tightly compressed than the install.wim it is turned into, so on ESD media most
+    # of the difference is the change of format, and the editions left out of the export, rather than the updates.
+    if (@($script:WimSizes | Where-Object { $_.BeforeName -like '*.esd' -and $_.AfterName -like '*.wim' }).Count -gt 0) {
+        Write-HostLog '  The media shipped install.esd, which is compressed far more tightly than install.wim, so most of that change is the format. -CompressEsd ships install.esd again.'
+    }
+    # Spaced after rather than before, so the next step's heading does not follow straight on.
+    Write-Host $LineBreak
 }
 
 # Records the build of an edition's recovery image. As with the sizes, the first call under a label is
@@ -5449,12 +5459,13 @@ function Show-WinReVersions {
     if ($script:WinReVersions.Count -eq 0) { return }
 
     $NameWidth = ($script:WinReVersions | ForEach-Object { $_.Label.Length } | Measure-Object -Maximum).Maximum
-    Write-Host ''
     Write-HostTimestamp 'Recovery image (WinRE) build, per edition:' -ForegroundColor Cyan
     foreach ($Entry in $script:WinReVersions) {
         $Change = if ($Entry.After -ne $Entry.Before) { "$($Entry.Before) -> $($Entry.After)" } else { "$($Entry.After) (unchanged)" }
         Write-HostLog ("  {0,-$NameWidth}  {1}" -f $Entry.Label, $Change)
     }
+    # Spaced after rather than before, so it sits under the step above it like the step's own lines do.
+    Write-Host $LineBreak
 }
 
 #endregion
@@ -7328,6 +7339,9 @@ $script:EsdPreTrimmed = $false
 $script:SourceMediaEditions = @()
 $script:SourceMediaDropped = @()
 if (-not (Test-Path -LiteralPath $InstallWimExtracted) -and (Test-Path -LiteralPath $InstallEsdExtracted)) {
+    # The starting size is the install.esd the media shipped, so the comparison at the end measures the ISO
+    # against the media it came from. The sample after the conversion below then only updates the finishing size.
+    Add-WimSizeSample -Label 'install.wim' -Path $InstallEsdExtracted
     Invoke-Task -Description 'The media uses install.esd - converting it to an editable install.wim...' -ScriptBlock {
         $Images = @(Get-WindowsImage -ImagePath $InstallEsdExtracted -ErrorAction Stop)
         $script:SourceMediaEditions = @($Images | ForEach-Object { [ordered]@{ Index = [int]$_.ImageIndex; Name = "$($_.ImageName)" } })
@@ -7367,8 +7381,8 @@ if (-not (Test-Path -LiteralPath $InstallWimExtracted)) {
     exit 1
 }
 
-# The starting sizes for the comparison at the end. Taken after any install.esd conversion, because that
-# WIM is the one servicing actually works on.
+# The starting sizes for the comparison at the end. On install.esd media the starting size was already taken
+# from the ESD above, so this only records where the conversion left it.
 Add-WimSizeSample -Label 'install.wim' -Path $InstallWimExtracted
 Add-WimSizeSample -Label 'boot.wim' -Path $BootWim
 
@@ -8407,7 +8421,7 @@ if (-not $SkipTattoo) {
                     })
                 }
                 ImageSizes         = @($script:WimSizes | ForEach-Object {
-                    [ordered]@{ Image = $_.Label; ShippedAs = $_.AfterName; BeforeMB = [math]::Round($_.Before / 1MB); AfterMB = [math]::Round($_.After / 1MB) }
+                    [ordered]@{ Image = $_.Label; StartedAs = $_.BeforeName; ShippedAs = $_.AfterName; BeforeMB = [math]::Round($_.Before / 1MB); AfterMB = [math]::Round($_.After / 1MB) }
                 })
             }
             Drivers     = if ($ResolvedDriverPath) {

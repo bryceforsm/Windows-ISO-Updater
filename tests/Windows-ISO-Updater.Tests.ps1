@@ -11,7 +11,8 @@ BeforeAll {
         'Test-MicrosoftDownloadUrl', 'Test-RebuildNeeded', 'Test-SameWriteTime', 'Test-UpdatePackageFile',
         'Compare-ScriptVersion', 'Receive-VersionCheck', 'Write-VersionCheckResult',
         'Get-ConsoleStyleSet', 'Get-ConsoleSymbol', 'Format-StepHeader', 'Format-SummaryBox',
-        'Get-OscdimgSummary', 'Get-OscdimgLogLines', 'Format-OscdimgSummary'
+        'Get-OscdimgSummary', 'Get-OscdimgLogLines', 'Format-OscdimgSummary',
+        'Add-WimSizeSample', 'Show-WimSizeComparison'
     )
     foreach ($Name in $Names) {
         $Definition = $Ast.Find({
@@ -1437,5 +1438,62 @@ Describe 'Reading oscdimg output' {
 
     It 'says nothing about what it cannot read' {
         Format-OscdimgSummary -Summary (Get-OscdimgSummary -Output @('Done.')) | Should -Be ''
+    }
+}
+
+Describe 'The image size comparison' {
+    BeforeAll {
+        function Write-HostLog { param($Message, $ForegroundColor) }
+        $script:LineBreak = ''
+    }
+
+    BeforeEach {
+        $script:WimSizes = New-Object System.Collections.Generic.List[psobject]
+        $script:Esd = Join-Path -Path $TestDrive -ChildPath 'install.esd'
+        $script:Wim = Join-Path -Path $TestDrive -ChildPath 'install.wim'
+        [IO.File]::WriteAllBytes($script:Esd, (New-Object byte[] 4MB))
+        [IO.File]::WriteAllBytes($script:Wim, (New-Object byte[] 7MB))
+    }
+
+    It 'starts ESD media from the install.esd it shipped' {
+        Add-WimSizeSample -Label 'install.wim' -Path $script:Esd
+        Add-WimSizeSample -Label 'install.wim' -Path $script:Wim
+        $script:WimSizes.Count | Should -Be 1
+        $script:WimSizes[0].BeforeName | Should -Be 'install.esd'
+        $script:WimSizes[0].AfterName | Should -Be 'install.wim'
+        $script:WimSizes[0].Before | Should -Be 4MB
+        $script:WimSizes[0].After | Should -Be 7MB
+    }
+
+    It 'names both files and explains the change of format on ESD media' {
+        Mock Write-HostLog {}
+        Mock Write-HostTimestamp {}
+        Mock Write-Host {}
+        Add-WimSizeSample -Label 'install.wim' -Path $script:Esd
+        Add-WimSizeSample -Label 'install.wim' -Path $script:Wim
+        Show-WimSizeComparison
+        Should -Invoke Write-HostLog -ParameterFilter { $Message -match '^  install\.esd -> install\.wim\s+4 MB ->\s+7 MB\s+\+3 MB$' }
+        Should -Invoke Write-HostLog -ParameterFilter { $Message -match 'compressed far more tightly' }
+    }
+
+    It 'shows a plain WIM without the note' {
+        Mock Write-HostLog {}
+        Mock Write-HostTimestamp {}
+        Mock Write-Host {}
+        Add-WimSizeSample -Label 'install.wim' -Path $script:Wim
+        Show-WimSizeComparison
+        Should -Invoke Write-HostLog -ParameterFilter { $Message -match '^  install\.wim\s' }
+        Should -Invoke Write-HostLog -Times 0 -ParameterFilter { $Message -match 'compressed far more tightly' }
+    }
+
+    It 'ends with an empty line rather than starting with one' {
+        $script:Calls = [System.Collections.Generic.List[string]]::new()
+        Mock Write-HostLog { $script:Calls.Add("log:$Message") }
+        Mock Write-HostTimestamp { $script:Calls.Add("stamp:$Message") }
+        Mock Write-Host { $script:Calls.Add("host:$Object") }
+        Add-WimSizeSample -Label 'install.wim' -Path $script:Wim
+        Show-WimSizeComparison
+        $script:Calls[0] | Should -Match '^stamp:Image sizes'
+        $script:Calls[-1] | Should -Be 'host:'
     }
 }
