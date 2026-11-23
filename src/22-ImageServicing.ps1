@@ -34,7 +34,7 @@ function Format-DismProgressDetail {
 function Invoke-Dism {
     param(
         [Parameter(Mandatory)][string[]]$ArgumentList,
-        [int]$Indent = 28,
+        [int]$Indent = -1,
         [string]$FailureMessage
     )
 
@@ -120,7 +120,7 @@ function Invoke-WatchedProcess {
         [scriptblock]$GetStage,
         [string]$Waiting = 'Working',
         [string]$Writing = 'Writing',
-        [int]$Indent = 0
+        [int]$Indent = -1
     )
 
     # A file the program has yet to create counts from nothing, so it is shown growing once it appears.
@@ -223,7 +223,7 @@ function Export-WimImage {
         [Parameter(Mandatory)][string]$DestinationImagePath,
         [ValidateSet('None', 'Fast', 'Max', 'Recovery')][string]$CompressionType = 'Max',
         [switch]$Setbootable,
-        [int]$Indent = 24
+        [int]$Indent = -1
     )
     $Arguments = @('/Export-Image', "/SourceImageFile:$SourceImagePath", "/SourceIndex:$SourceIndex",
         "/DestinationImageFile:$DestinationImagePath", "/Compress:$($CompressionType.ToLowerInvariant())")
@@ -243,7 +243,7 @@ function Export-WimImage {
 function Save-MountedImage {
     param(
         [Parameter(Mandatory)][string]$Path,
-        [int]$Indent = 26
+        [int]$Indent = -1
     )
     $ImagePath = $null
     try {
@@ -815,7 +815,7 @@ function Optimize-WinReImage {
         Write-HostTimestamp '      Re-exporting the recovery image to shrink it...'
         # Always Max, never -FastCompression: this image has to fit a fixed recovery partition, and at a few
         # hundred MB the compression time is irrelevant next to install.wim.
-        Export-WimImage -SourceImagePath $WinReWim -SourceIndex 1 -DestinationImagePath $Temp -CompressionType Max -Indent 28
+        Export-WimImage -SourceImagePath $WinReWim -SourceIndex 1 -DestinationImagePath $Temp -CompressionType Max
         Set-ItemProperty -LiteralPath $WinReWim -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
         # Copied rather than moved, because the destination lives inside a DISM projection of install.wim.
         Copy-Item -LiteralPath $Temp -Destination $WinReWim -Force -ErrorAction Stop

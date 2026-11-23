@@ -200,7 +200,7 @@ function Invoke-Oscdimg {
         [Parameter(Mandatory)][string]$FilePath,
         [Parameter(Mandatory)][string[]]$ArgumentList,
         [Parameter(Mandatory)][string]$Destination,
-        [int]$Indent = 4
+        [int]$Indent = -1
     )
     # Quoted the way the call operator quotes, so a path with spaces still reaches oscdimg as one argument.
     $Arguments = (@($ArgumentList | ForEach-Object { if ("$_" -match '\s' -and "$_" -notmatch '^".*"$') { "`"$_`"" } else { "$_" } })) -join ' '

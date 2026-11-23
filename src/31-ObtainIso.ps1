@@ -29,24 +29,19 @@ if (-not $Unattended -and -not $SkipInteractive -and -not $ListEditions -and -no
     }
     elseif ($script:EffectiveServer) {
         Write-HostLog "  - Use the Windows Server ISO it finds in the download folder: $DlDir"
-        Write-HostLog "      NOTE: Server media cannot be downloaded automatically, so drop the ISO in that folder" -ForegroundColor Yellow
-        Write-HostLog "            or re-run with -IsoPath." -ForegroundColor Yellow
+        Write-HostLog "      NOTE: Server media cannot be downloaded automatically, so drop the ISO in that folder or re-run with -IsoPath." -ForegroundColor Yellow
     }
     elseif ($UseFido) {
         Write-HostLog "  - Download the matching official Windows $WindowsVersion ISO from Microsoft (~8 GB)"
-        Write-HostLog "      TIP: Microsoft can rate-limit/block repeated ISO downloads. The script retries, and can" -ForegroundColor Yellow
-        Write-HostLog "           then offer Microsoft's Media Creation Tool instead. To skip all that, download the" -ForegroundColor Yellow
-        Write-HostLog "           ISO yourself and re-run with -IsoPath." -ForegroundColor Yellow
+        Write-HostLog "      TIP: Microsoft can rate-limit/block repeated ISO downloads. The script retries, and can then offer Microsoft's Media Creation Tool instead. To skip all that, download the ISO yourself and re-run with -IsoPath." -ForegroundColor Yellow
     }
     elseif ($UseMct) {
         Write-HostLog "  - Open Microsoft's Media Creation Tool so you can download the ISO with it (~8 GB)"
-        Write-HostLog "      NOTE: MCT has no headless mode, so you click through its last few pages and save the" -ForegroundColor Yellow
-        Write-HostLog "            ISO into the download folder. The script waits, then picks it up." -ForegroundColor Yellow
+        Write-HostLog "      NOTE: MCT has no headless mode, so you click through its last few pages and save the ISO into the download folder. The script waits, then picks it up." -ForegroundColor Yellow
     }
     else {
         Write-HostLog "  - Use the ISO it finds in the download folder: $DlDir"
-        Write-HostLog "      NOTE: no ISO is downloaded automatically. Drop one into that folder or re-run with" -ForegroundColor Yellow
-        Write-HostLog "            -IsoPath, or add -UseFido to have the script fetch one from Microsoft." -ForegroundColor Yellow
+        Write-HostLog "      NOTE: no ISO is downloaded automatically. Drop one into that folder or re-run with -IsoPath, or add -UseFido to have the script fetch one from Microsoft." -ForegroundColor Yellow
     }
     Write-HostLog "  - Extract it to $ExtractDir"
     if ($KeepEditions -and $KeepEditions.Count -gt 0) {

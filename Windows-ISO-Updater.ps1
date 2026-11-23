@@ -1,6 +1,6 @@
 # GENERATED FILE. Edit the files in src\ and run tools\Build-Script.ps1, because changes made here are overwritten.
 # Windows ISO Updater
-# Version: 2026.11.22.8   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
+# Version: 2026.11.22.9   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
 #
 #region Script overview
 # This script builds a fully up-to-date ("slipstreamed") Windows 11, Windows 10 or Windows Server
@@ -323,7 +323,7 @@ $script:ScriptPath = $PSCommandPath
 
 # Kept in step with the header comment by tools\Update-Version.ps1, and shown in the log and recorded in
 # the build stamp so a finished ISO can be traced back to the exact script that built it.
-$ScriptVersion = '2026.11.22.8'
+$ScriptVersion = '2026.11.22.9'
 
 # A scheduled run has nobody to answer a prompt.
 if ($Scheduled) {
@@ -690,6 +690,25 @@ function Get-TimeStamp {
     return $Date.ToString('[HH:mm:ss]', [System.Globalization.CultureInfo]::InvariantCulture)
 }
 
+# Where a top-level message's text starts: after the timestamp, a space, the symbol and another space. Lists,
+# tables and boxes start here too, so everything on the console shares one left edge.
+function Get-MessageColumn {
+    return (Get-TimeStamp).Length + 3
+}
+
+# The indent a line is drawn with. Messages and rows go in steps of two spaces: the top level for headings and
+# anything outside a step, then one level for a step's own lines, and deeper levels for detail under those.
+# Inside a step, a line written at the top level is moved in a level, so every line of a step starts at least
+# in the same column as its "Step finished" line. -InStep is for the tests; it defaults to whether a step is running.
+function Get-ConsoleIndent {
+    param(
+        [int]$Lead,
+        [bool]$InStep = [bool]$script:CurrentStep
+    )
+    if ($InStep -and $Lead -lt 2) { return 2 }
+    return $Lead
+}
+
 function Get-FriendlyDate {
     param([datetime]$Date = (Get-Date))
     # Ordinal suffixes are English-only, so the month name is forced to invariant culture rather than
@@ -893,8 +912,12 @@ function Write-SummaryBox {
         [System.Collections.Specialized.OrderedDictionary]$Rows,
         [consolecolor]$ForegroundColor = 'Green'
     )
-    foreach ($Line in (Format-SummaryBox -Title $Title -Rows $Rows -Width (Get-ConsoleWidth) -Style (Get-ConsoleStyle))) {
-        Write-Host $Line -ForegroundColor $ForegroundColor
+    # In the message column, like every other block of output.
+    $Column = Get-MessageColumn
+    $Width = Get-ConsoleWidth
+    if ($Width -gt 0) { $Width -= $Column }
+    foreach ($Line in (Format-SummaryBox -Title $Title -Rows $Rows -Width $Width -Style (Get-ConsoleStyle))) {
+        Write-Host ((' ' * $Column) + $Line) -ForegroundColor $ForegroundColor
     }
     Write-CMTraceLog -Message $Title
     foreach ($Key in $Rows.Keys) { Write-CMTraceLog -Message "  ${Key}: $($Rows[$Key])" }
@@ -1040,8 +1063,13 @@ function Format-ByteProgress {
     return ('{0:N0} of {1:N0} MB{2}' -f ($Done / 1MB), ($Total / 1MB), $Speed)
 }
 
+# Without an -Indent, the line goes one level under the text of the last timestamped message, which is the
+# one it reports on, so no caller has to know how wide the timestamp is.
 function New-ProgressLine {
-    param([int]$Indent = 0)
+    param([int]$Indent = -1)
+    if ($Indent -lt 0) {
+        $Indent = if ($script:LastTextColumn) { $script:LastTextColumn + 2 } else { (Get-MessageColumn) + 2 }
+    }
     return @{ Width = (Get-ConsoleWidth); Indent = $Indent; Start = (Get-Date); Percent = -2; Detail = $null; Drawn = $false; Length = 0 }
 }
 
@@ -1123,8 +1151,12 @@ function Write-HostTimestamp {
     if (-not $PSBoundParameters.ContainsKey('Symbol')) { $Symbol = Get-ConsoleSymbol -Color "$ForegroundColor" -Style $Style }
     # The symbol goes just before the text, after the message's own indent, so it stays beside what it marks.
     $Lead = $Message.Length - $Message.TrimStart().Length
-    $Line = "$(Get-TimeStamp -Date $Now) " + $Message.Substring(0, $Lead) + "$Symbol " + $Message.TrimStart()
-    $Indent = (Get-TimeStamp -Date $Now).Length + 1 + $Lead + 2
+    # A step's heading stays at the top level. Everything else follows the indent rules (see Get-ConsoleIndent).
+    if (-not $PSBoundParameters.ContainsKey('Symbol')) { $Lead = Get-ConsoleIndent -Lead $Lead }
+    $Line = "$(Get-TimeStamp -Date $Now) " + (' ' * $Lead) + "$Symbol " + $Message.TrimStart()
+    $Indent = (Get-MessageColumn) + $Lead
+    # Where this message's text starts, so a progress line that follows can sit one level under it.
+    $script:LastTextColumn = $Indent
     foreach ($Part in (Format-WrappedText -Text $Line -Width (Get-ConsoleWidth) -Indent $Indent)) {
         Write-Host $Part -ForegroundColor $ForegroundColor
     }
@@ -1149,8 +1181,12 @@ function Write-HostLog {
         [consolecolor]$ForegroundColor = $(try { ((Get-Host).ui.rawui.ForegroundColor) } catch { 'White' })
     )
 
-    $Indent = $Message.Length - $Message.TrimStart().Length
-    foreach ($Part in (Format-WrappedText -Text $Message -Width (Get-ConsoleWidth) -Indent $Indent)) {
+    if (-not "$Message".Trim()) { Write-Host ''; return }
+    # Rows start in the message column, so a list or table lines up with the timestamped lines around it, and
+    # inside a step they move in a level like the step's own lines (see Get-ConsoleIndent).
+    $Lead = Get-ConsoleIndent -Lead ($Message.Length - $Message.TrimStart().Length)
+    $Line = (' ' * ((Get-MessageColumn) + $Lead)) + $Message.TrimStart()
+    foreach ($Part in (Format-WrappedText -Text $Line -Width (Get-ConsoleWidth) -Indent ((Get-MessageColumn) + $Lead))) {
         Write-Host $Part -ForegroundColor $ForegroundColor
     }
     if ("$Message".Trim()) {
@@ -1352,7 +1388,7 @@ function Copy-LargeFile {
         # drive the progress line and are dropped, so the output kept for an error message stays short.
         $RoboArgs = @($SourceDir, $TargetDir, (Split-Path -Leaf $Path),
             '/COPY:DAT', '/J', '/R:2', '/W:5', '/NJH', '/NJS', '/NDL')
-        $Progress = New-ProgressLine -Indent 24
+        $Progress = New-ProgressLine
         try {
             $RoboOutput = & robocopy.exe @RoboArgs 2>&1 | ForEach-Object {
                 $Line = "$_"
@@ -1426,7 +1462,7 @@ function Get-FileDownload {
             Write-HostTimestamp '  Downloading with BITS...'
             # Started in the background and polled, so the bytes transferred can be shown as it goes.
             $Job = Start-BitsTransfer -Source $Url -Destination $Partial -Description 'Windows download' -Asynchronous -ErrorAction Stop
-            $Progress = New-ProgressLine -Indent 24
+            $Progress = New-ProgressLine
             $LastBytes = [long]-1
             $Idle = [System.Diagnostics.Stopwatch]::StartNew()
             while ($Job.JobState -in 'Queued', 'Connecting', 'Transferring', 'TransientError') {
@@ -2655,7 +2691,7 @@ function Get-Sha256 {
         # Reported only for the multi-gigabyte ISOs, where a slow source can make this take minutes. On a
         # console that is a progress line. Without one (a scheduled run), a line every 20% goes to the
         # transcript instead, so its log still shows the hash moving.
-        if ($ShowProgress -and $Length -gt 1GB) { $Progress = New-ProgressLine -Indent 24 }
+        if ($ShowProgress -and $Length -gt 1GB) { $Progress = New-ProgressLine }
         while (($Count = $Stream.Read($Buffer, 0, $Buffer.Length)) -gt 0) {
             [void]$Algorithm.TransformBlock($Buffer, 0, $Count, $null, 0)
             $Done += $Count
@@ -3738,7 +3774,7 @@ function Invoke-Oscdimg {
         [Parameter(Mandatory)][string]$FilePath,
         [Parameter(Mandatory)][string[]]$ArgumentList,
         [Parameter(Mandatory)][string]$Destination,
-        [int]$Indent = 4
+        [int]$Indent = -1
     )
     # Quoted the way the call operator quotes, so a path with spaces still reaches oscdimg as one argument.
     $Arguments = (@($ArgumentList | ForEach-Object { if ("$_" -match '\s' -and "$_" -notmatch '^".*"$') { "`"$_`"" } else { "$_" } })) -join ' '
@@ -4346,7 +4382,7 @@ function Format-DismProgressDetail {
 function Invoke-Dism {
     param(
         [Parameter(Mandatory)][string[]]$ArgumentList,
-        [int]$Indent = 28,
+        [int]$Indent = -1,
         [string]$FailureMessage
     )
 
@@ -4432,7 +4468,7 @@ function Invoke-WatchedProcess {
         [scriptblock]$GetStage,
         [string]$Waiting = 'Working',
         [string]$Writing = 'Writing',
-        [int]$Indent = 0
+        [int]$Indent = -1
     )
 
     # A file the program has yet to create counts from nothing, so it is shown growing once it appears.
@@ -4535,7 +4571,7 @@ function Export-WimImage {
         [Parameter(Mandatory)][string]$DestinationImagePath,
         [ValidateSet('None', 'Fast', 'Max', 'Recovery')][string]$CompressionType = 'Max',
         [switch]$Setbootable,
-        [int]$Indent = 24
+        [int]$Indent = -1
     )
     $Arguments = @('/Export-Image', "/SourceImageFile:$SourceImagePath", "/SourceIndex:$SourceIndex",
         "/DestinationImageFile:$DestinationImagePath", "/Compress:$($CompressionType.ToLowerInvariant())")
@@ -4555,7 +4591,7 @@ function Export-WimImage {
 function Save-MountedImage {
     param(
         [Parameter(Mandatory)][string]$Path,
-        [int]$Indent = 26
+        [int]$Indent = -1
     )
     $ImagePath = $null
     try {
@@ -5127,7 +5163,7 @@ function Optimize-WinReImage {
         Write-HostTimestamp '      Re-exporting the recovery image to shrink it...'
         # Always Max, never -FastCompression: this image has to fit a fixed recovery partition, and at a few
         # hundred MB the compression time is irrelevant next to install.wim.
-        Export-WimImage -SourceImagePath $WinReWim -SourceIndex 1 -DestinationImagePath $Temp -CompressionType Max -Indent 28
+        Export-WimImage -SourceImagePath $WinReWim -SourceIndex 1 -DestinationImagePath $Temp -CompressionType Max
         Set-ItemProperty -LiteralPath $WinReWim -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
         # Copied rather than moved, because the destination lives inside a DISM projection of install.wim.
         Copy-Item -LiteralPath $Temp -Destination $WinReWim -Force -ErrorAction Stop
@@ -6276,7 +6312,7 @@ $CloudPattern = '(?i)[\\/](My Drive|Google Drive|GoogleDrive|OneDrive|OneDrive -
 foreach ($Pair in @(@{ Name = 'Working folder'; Path = $WorkRoot }, @{ Name = 'Download folder'; Path = $DlDir }, @{ Name = 'Log folder'; Path = $LogDir })) {
     if ($Pair.Path -match $CloudPattern -or $Pair.Path -match '(?i)OneDrive') {
         Write-HostTimestamp "WARNING: The $($Pair.Name.ToLower()) is on a cloud-synced path ($($Pair.Path))." -ForegroundColor Yellow
-        Write-HostTimestamp "         DISM cannot reliably service files that a cloud client streams/dehydrates. Use -WorkPath and -DownloadPath to point at a LOCAL disk (e.g. C:\WISO-Work)." -ForegroundColor Yellow
+        Write-HostTimestamp "  DISM cannot reliably service files that a cloud client streams/dehydrates. Use -WorkPath and -DownloadPath to point at a LOCAL disk (e.g. C:\WISO-Work)." -ForegroundColor Yellow
     }
 }
 
@@ -6645,24 +6681,19 @@ if (-not $Unattended -and -not $SkipInteractive -and -not $ListEditions -and -no
     }
     elseif ($script:EffectiveServer) {
         Write-HostLog "  - Use the Windows Server ISO it finds in the download folder: $DlDir"
-        Write-HostLog "      NOTE: Server media cannot be downloaded automatically, so drop the ISO in that folder" -ForegroundColor Yellow
-        Write-HostLog "            or re-run with -IsoPath." -ForegroundColor Yellow
+        Write-HostLog "      NOTE: Server media cannot be downloaded automatically, so drop the ISO in that folder or re-run with -IsoPath." -ForegroundColor Yellow
     }
     elseif ($UseFido) {
         Write-HostLog "  - Download the matching official Windows $WindowsVersion ISO from Microsoft (~8 GB)"
-        Write-HostLog "      TIP: Microsoft can rate-limit/block repeated ISO downloads. The script retries, and can" -ForegroundColor Yellow
-        Write-HostLog "           then offer Microsoft's Media Creation Tool instead. To skip all that, download the" -ForegroundColor Yellow
-        Write-HostLog "           ISO yourself and re-run with -IsoPath." -ForegroundColor Yellow
+        Write-HostLog "      TIP: Microsoft can rate-limit/block repeated ISO downloads. The script retries, and can then offer Microsoft's Media Creation Tool instead. To skip all that, download the ISO yourself and re-run with -IsoPath." -ForegroundColor Yellow
     }
     elseif ($UseMct) {
         Write-HostLog "  - Open Microsoft's Media Creation Tool so you can download the ISO with it (~8 GB)"
-        Write-HostLog "      NOTE: MCT has no headless mode, so you click through its last few pages and save the" -ForegroundColor Yellow
-        Write-HostLog "            ISO into the download folder. The script waits, then picks it up." -ForegroundColor Yellow
+        Write-HostLog "      NOTE: MCT has no headless mode, so you click through its last few pages and save the ISO into the download folder. The script waits, then picks it up." -ForegroundColor Yellow
     }
     else {
         Write-HostLog "  - Use the ISO it finds in the download folder: $DlDir"
-        Write-HostLog "      NOTE: no ISO is downloaded automatically. Drop one into that folder or re-run with" -ForegroundColor Yellow
-        Write-HostLog "            -IsoPath, or add -UseFido to have the script fetch one from Microsoft." -ForegroundColor Yellow
+        Write-HostLog "      NOTE: no ISO is downloaded automatically. Drop one into that folder or re-run with -IsoPath, or add -UseFido to have the script fetch one from Microsoft." -ForegroundColor Yellow
     }
     Write-HostLog "  - Extract it to $ExtractDir"
     if ($KeepEditions -and $KeepEditions.Count -gt 0) {
@@ -7094,7 +7125,7 @@ if ($RecoveryIsoOnly) {
                             $From = Join-Path -Path $WinReMount -ChildPath "Windows\Boot\EFI\$Name"
                             if (Test-Path -LiteralPath $From) { Copy-Item -LiteralPath $From -Destination $RecoveryBootManagers -Force -ErrorAction Stop }
                         }
-                        Save-MountedImage -Path $WinReMount -Indent 28
+                        Save-MountedImage -Path $WinReMount
                         $Re = Get-WinReVersion -WinReWim $script:RecoveryWinRe
                         if ($Re) { Write-HostTimestamp "  The recovery image is now at $($Re.Version)." -ForegroundColor Green }
                     }
@@ -7821,7 +7852,7 @@ if ($UpdateGroups.Count -gt 0 -or $script:DriverInfFiles.Count -gt 0) {
                                 Write-HostTimestamp '      Cleaning up the recovery image component store (/StartComponentCleanup /ResetBase)...'
                                 Invoke-Dism -ArgumentList "/Image:$WinReMount", '/Cleanup-Image', '/StartComponentCleanup', '/ResetBase' | Out-Null
                                 Remove-ImageResidue -MountDir $WinReMount
-                                Save-MountedImage -Path $WinReMount -Indent 28
+                                Save-MountedImage -Path $WinReMount
                                 Optimize-WinReImage -WinReWim $WinReWim -ImageLabel $WinReLabel
                                 # Read before the edition is committed, since this file only exists while it is mounted.
                                 Add-WimSizeSample -Label $WinReSizeLabel -Path $WinReWim
@@ -7879,7 +7910,7 @@ if ($UpdateGroups.Count -gt 0 -or $script:DriverInfFiles.Count -gt 0) {
                 if ($UpdateGroups.Count -gt 0) {
                     Write-HostTimestamp '    Cleaning up the component store (/StartComponentCleanup /ResetBase)...'
                     # ResetBase permanently removes superseded components, shrinking the image. This is slow.
-                    Invoke-Dism -ArgumentList "/Image:$MountDir", '/Cleanup-Image', '/StartComponentCleanup', '/ResetBase' -Indent 26 | Out-Null
+                    Invoke-Dism -ArgumentList "/Image:$MountDir", '/Cleanup-Image', '/StartComponentCleanup', '/ResetBase' | Out-Null
                 }
 
                 Remove-ImageResidue -MountDir $MountDir
@@ -7892,7 +7923,7 @@ if ($UpdateGroups.Count -gt 0 -or $script:DriverInfFiles.Count -gt 0) {
                 if (-not $script:FinalImageLocale) { $script:FinalImageLocale = Get-MountedImageLocale -MountPath $MountDir }
 
                 Write-HostTimestamp '    Committing and unmounting...'
-                Save-MountedImage -Path $MountDir -Indent 26
+                Save-MountedImage -Path $MountDir
                 Write-HostTimestamp "    Index $Index done." -ForegroundColor Green
             }
             catch {
@@ -7959,7 +7990,7 @@ if ($UpdateGroups.Count -gt 0 -or $script:DriverInfFiles.Count -gt 0) {
                     if ([int]$BootImg.ImageIndex -eq 2) {
                         Add-ImageDrivers -MountDir $MountDir -InfFiles $script:DriverInfFiles -ImageLabel "boot.wim index 2 ($($BootImg.ImageName))" | Out-Null
                     }
-                    if ($UpdateGroups.Count -gt 0) { Invoke-Dism -ArgumentList "/Image:$MountDir", '/Cleanup-Image', '/StartComponentCleanup' -Indent 26 | Out-Null }
+                    if ($UpdateGroups.Count -gt 0) { Invoke-Dism -ArgumentList "/Image:$MountDir", '/Cleanup-Image', '/StartComponentCleanup' | Out-Null }
                     Remove-ImageResidue -MountDir $MountDir
 
                     # Index 2 is the Windows Setup image. The cumulative update raises the version of the
@@ -7986,7 +8017,7 @@ if ($UpdateGroups.Count -gt 0 -or $script:DriverInfFiles.Count -gt 0) {
                         }
                     }
 
-                    Save-MountedImage -Path $MountDir -Indent 26
+                    Save-MountedImage -Path $MountDir
                     Write-HostTimestamp "    boot.wim index $($BootImg.ImageIndex) done." -ForegroundColor Green
                 }
                 catch {

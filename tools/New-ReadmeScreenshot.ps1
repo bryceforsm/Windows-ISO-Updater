@@ -169,8 +169,9 @@ $Summary = [ordered]@{
     'Run time'     = Format-Duration ($Finished - $script:RunStart)
     'Build record' = '\WISO-Build on the ISO'
 }
-foreach ($BoxLine in (Format-SummaryBox -Title 'Done. Your updated Windows installation ISO is ready' -Rows $Summary -Width $Columns -Style $script:Style)) {
-    $script:Lines.Add([pscustomobject]@{ Text = $BoxLine; Color = 'Green' })
+# In the message column, after the timestamp and symbol, as Write-SummaryBox draws it.
+foreach ($BoxLine in (Format-SummaryBox -Title 'Done. Your updated Windows installation ISO is ready' -Rows $Summary -Width ($Columns - 13) -Style $script:Style)) {
+    $script:Lines.Add([pscustomobject]@{ Text = (' ' * 13) + $BoxLine; Color = 'Green' })
 }
 Add-Rule
 Add-Line 'Windows ISO Updater script finished.' -Color Green

@@ -149,7 +149,7 @@ if ($UpdateGroups.Count -gt 0 -or $script:DriverInfFiles.Count -gt 0) {
                                 Write-HostTimestamp '      Cleaning up the recovery image component store (/StartComponentCleanup /ResetBase)...'
                                 Invoke-Dism -ArgumentList "/Image:$WinReMount", '/Cleanup-Image', '/StartComponentCleanup', '/ResetBase' | Out-Null
                                 Remove-ImageResidue -MountDir $WinReMount
-                                Save-MountedImage -Path $WinReMount -Indent 28
+                                Save-MountedImage -Path $WinReMount
                                 Optimize-WinReImage -WinReWim $WinReWim -ImageLabel $WinReLabel
                                 # Read before the edition is committed, since this file only exists while it is mounted.
                                 Add-WimSizeSample -Label $WinReSizeLabel -Path $WinReWim
@@ -207,7 +207,7 @@ if ($UpdateGroups.Count -gt 0 -or $script:DriverInfFiles.Count -gt 0) {
                 if ($UpdateGroups.Count -gt 0) {
                     Write-HostTimestamp '    Cleaning up the component store (/StartComponentCleanup /ResetBase)...'
                     # ResetBase permanently removes superseded components, shrinking the image. This is slow.
-                    Invoke-Dism -ArgumentList "/Image:$MountDir", '/Cleanup-Image', '/StartComponentCleanup', '/ResetBase' -Indent 26 | Out-Null
+                    Invoke-Dism -ArgumentList "/Image:$MountDir", '/Cleanup-Image', '/StartComponentCleanup', '/ResetBase' | Out-Null
                 }
 
                 Remove-ImageResidue -MountDir $MountDir
@@ -220,7 +220,7 @@ if ($UpdateGroups.Count -gt 0 -or $script:DriverInfFiles.Count -gt 0) {
                 if (-not $script:FinalImageLocale) { $script:FinalImageLocale = Get-MountedImageLocale -MountPath $MountDir }
 
                 Write-HostTimestamp '    Committing and unmounting...'
-                Save-MountedImage -Path $MountDir -Indent 26
+                Save-MountedImage -Path $MountDir
                 Write-HostTimestamp "    Index $Index done." -ForegroundColor Green
             }
             catch {
@@ -287,7 +287,7 @@ if ($UpdateGroups.Count -gt 0 -or $script:DriverInfFiles.Count -gt 0) {
                     if ([int]$BootImg.ImageIndex -eq 2) {
                         Add-ImageDrivers -MountDir $MountDir -InfFiles $script:DriverInfFiles -ImageLabel "boot.wim index 2 ($($BootImg.ImageName))" | Out-Null
                     }
-                    if ($UpdateGroups.Count -gt 0) { Invoke-Dism -ArgumentList "/Image:$MountDir", '/Cleanup-Image', '/StartComponentCleanup' -Indent 26 | Out-Null }
+                    if ($UpdateGroups.Count -gt 0) { Invoke-Dism -ArgumentList "/Image:$MountDir", '/Cleanup-Image', '/StartComponentCleanup' | Out-Null }
                     Remove-ImageResidue -MountDir $MountDir
 
                     # Index 2 is the Windows Setup image. The cumulative update raises the version of the
@@ -314,7 +314,7 @@ if ($UpdateGroups.Count -gt 0 -or $script:DriverInfFiles.Count -gt 0) {
                         }
                     }
 
-                    Save-MountedImage -Path $MountDir -Indent 26
+                    Save-MountedImage -Path $MountDir
                     Write-HostTimestamp "    boot.wim index $($BootImg.ImageIndex) done." -ForegroundColor Green
                 }
                 catch {

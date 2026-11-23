@@ -34,7 +34,7 @@ function Copy-LargeFile {
         # drive the progress line and are dropped, so the output kept for an error message stays short.
         $RoboArgs = @($SourceDir, $TargetDir, (Split-Path -Leaf $Path),
             '/COPY:DAT', '/J', '/R:2', '/W:5', '/NJH', '/NJS', '/NDL')
-        $Progress = New-ProgressLine -Indent 24
+        $Progress = New-ProgressLine
         try {
             $RoboOutput = & robocopy.exe @RoboArgs 2>&1 | ForEach-Object {
                 $Line = "$_"
@@ -108,7 +108,7 @@ function Get-FileDownload {
             Write-HostTimestamp '  Downloading with BITS...'
             # Started in the background and polled, so the bytes transferred can be shown as it goes.
             $Job = Start-BitsTransfer -Source $Url -Destination $Partial -Description 'Windows download' -Asynchronous -ErrorAction Stop
-            $Progress = New-ProgressLine -Indent 24
+            $Progress = New-ProgressLine
             $LastBytes = [long]-1
             $Idle = [System.Diagnostics.Stopwatch]::StartNew()
             while ($Job.JobState -in 'Queued', 'Connecting', 'Transferring', 'TransientError') {

@@ -7,6 +7,25 @@ function Get-TimeStamp {
     return $Date.ToString('[HH:mm:ss]', [System.Globalization.CultureInfo]::InvariantCulture)
 }
 
+# Where a top-level message's text starts: after the timestamp, a space, the symbol and another space. Lists,
+# tables and boxes start here too, so everything on the console shares one left edge.
+function Get-MessageColumn {
+    return (Get-TimeStamp).Length + 3
+}
+
+# The indent a line is drawn with. Messages and rows go in steps of two spaces: the top level for headings and
+# anything outside a step, then one level for a step's own lines, and deeper levels for detail under those.
+# Inside a step, a line written at the top level is moved in a level, so every line of a step starts at least
+# in the same column as its "Step finished" line. -InStep is for the tests; it defaults to whether a step is running.
+function Get-ConsoleIndent {
+    param(
+        [int]$Lead,
+        [bool]$InStep = [bool]$script:CurrentStep
+    )
+    if ($InStep -and $Lead -lt 2) { return 2 }
+    return $Lead
+}
+
 function Get-FriendlyDate {
     param([datetime]$Date = (Get-Date))
     # Ordinal suffixes are English-only, so the month name is forced to invariant culture rather than
@@ -210,8 +229,12 @@ function Write-SummaryBox {
         [System.Collections.Specialized.OrderedDictionary]$Rows,
         [consolecolor]$ForegroundColor = 'Green'
     )
-    foreach ($Line in (Format-SummaryBox -Title $Title -Rows $Rows -Width (Get-ConsoleWidth) -Style (Get-ConsoleStyle))) {
-        Write-Host $Line -ForegroundColor $ForegroundColor
+    # In the message column, like every other block of output.
+    $Column = Get-MessageColumn
+    $Width = Get-ConsoleWidth
+    if ($Width -gt 0) { $Width -= $Column }
+    foreach ($Line in (Format-SummaryBox -Title $Title -Rows $Rows -Width $Width -Style (Get-ConsoleStyle))) {
+        Write-Host ((' ' * $Column) + $Line) -ForegroundColor $ForegroundColor
     }
     Write-CMTraceLog -Message $Title
     foreach ($Key in $Rows.Keys) { Write-CMTraceLog -Message "  ${Key}: $($Rows[$Key])" }
@@ -357,8 +380,13 @@ function Format-ByteProgress {
     return ('{0:N0} of {1:N0} MB{2}' -f ($Done / 1MB), ($Total / 1MB), $Speed)
 }
 
+# Without an -Indent, the line goes one level under the text of the last timestamped message, which is the
+# one it reports on, so no caller has to know how wide the timestamp is.
 function New-ProgressLine {
-    param([int]$Indent = 0)
+    param([int]$Indent = -1)
+    if ($Indent -lt 0) {
+        $Indent = if ($script:LastTextColumn) { $script:LastTextColumn + 2 } else { (Get-MessageColumn) + 2 }
+    }
     return @{ Width = (Get-ConsoleWidth); Indent = $Indent; Start = (Get-Date); Percent = -2; Detail = $null; Drawn = $false; Length = 0 }
 }
 
@@ -440,8 +468,12 @@ function Write-HostTimestamp {
     if (-not $PSBoundParameters.ContainsKey('Symbol')) { $Symbol = Get-ConsoleSymbol -Color "$ForegroundColor" -Style $Style }
     # The symbol goes just before the text, after the message's own indent, so it stays beside what it marks.
     $Lead = $Message.Length - $Message.TrimStart().Length
-    $Line = "$(Get-TimeStamp -Date $Now) " + $Message.Substring(0, $Lead) + "$Symbol " + $Message.TrimStart()
-    $Indent = (Get-TimeStamp -Date $Now).Length + 1 + $Lead + 2
+    # A step's heading stays at the top level. Everything else follows the indent rules (see Get-ConsoleIndent).
+    if (-not $PSBoundParameters.ContainsKey('Symbol')) { $Lead = Get-ConsoleIndent -Lead $Lead }
+    $Line = "$(Get-TimeStamp -Date $Now) " + (' ' * $Lead) + "$Symbol " + $Message.TrimStart()
+    $Indent = (Get-MessageColumn) + $Lead
+    # Where this message's text starts, so a progress line that follows can sit one level under it.
+    $script:LastTextColumn = $Indent
     foreach ($Part in (Format-WrappedText -Text $Line -Width (Get-ConsoleWidth) -Indent $Indent)) {
         Write-Host $Part -ForegroundColor $ForegroundColor
     }
@@ -466,8 +498,12 @@ function Write-HostLog {
         [consolecolor]$ForegroundColor = $(try { ((Get-Host).ui.rawui.ForegroundColor) } catch { 'White' })
     )
 
-    $Indent = $Message.Length - $Message.TrimStart().Length
-    foreach ($Part in (Format-WrappedText -Text $Message -Width (Get-ConsoleWidth) -Indent $Indent)) {
+    if (-not "$Message".Trim()) { Write-Host ''; return }
+    # Rows start in the message column, so a list or table lines up with the timestamped lines around it, and
+    # inside a step they move in a level like the step's own lines (see Get-ConsoleIndent).
+    $Lead = Get-ConsoleIndent -Lead ($Message.Length - $Message.TrimStart().Length)
+    $Line = (' ' * ((Get-MessageColumn) + $Lead)) + $Message.TrimStart()
+    foreach ($Part in (Format-WrappedText -Text $Line -Width (Get-ConsoleWidth) -Indent ((Get-MessageColumn) + $Lead))) {
         Write-Host $Part -ForegroundColor $ForegroundColor
     }
     if ("$Message".Trim()) {

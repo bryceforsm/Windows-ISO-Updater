@@ -36,7 +36,7 @@ function Get-Sha256 {
         # Reported only for the multi-gigabyte ISOs, where a slow source can make this take minutes. On a
         # console that is a progress line. Without one (a scheduled run), a line every 20% goes to the
         # transcript instead, so its log still shows the hash moving.
-        if ($ShowProgress -and $Length -gt 1GB) { $Progress = New-ProgressLine -Indent 24 }
+        if ($ShowProgress -and $Length -gt 1GB) { $Progress = New-ProgressLine }
         while (($Count = $Stream.Read($Buffer, 0, $Buffer.Length)) -gt 0) {
             [void]$Algorithm.TransformBlock($Buffer, 0, $Count, $null, 0)
             $Done += $Count
