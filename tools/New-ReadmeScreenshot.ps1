@@ -149,9 +149,10 @@ Add-Step 'Servicing install.wim index 3 (Windows 11 Pro)...' {
 Add-Step 'Servicing boot.wim index 2 (Microsoft Windows Setup (amd64))...' {
     Add-Line '    boot.wim index 2 done.' -Color Green -Wait 263
 }
-Add-Step "Recompiling the bootable ISO to $Output ..." {
+Add-Step 'Recompiling the bootable ISO...' {
+    Add-Line "  Writing to: $Output"
     Add-Line '  Volume label: W11_25H2_X64_2610' -Wait 1
-    Add-Line '  New ISO created (6.84 GB).' -Color Green -Wait 171
+    Add-Line '  New ISO created (6.84 GB): 982 files in 98 directories, 17 MB saved by writing identical files once.' -Color Green -Wait 171
 }
 
 # The real run prints a per-step timing table here. It is left out to keep the image a sensible height.
