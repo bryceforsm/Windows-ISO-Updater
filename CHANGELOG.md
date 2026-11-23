@@ -4,6 +4,10 @@ What changed in each release. Versions are dates, `yyyy.MM.dd.<revision>`. Relea
 
 ## [Unreleased]
 
+### Added
+
+- A run started by hand now asks before creating its working folder (`C:\WISO-Work`, or the folder `-WorkPath` names) when it does not exist yet, and says how much free space that drive has. Cancelling exits without creating anything, and `-WorkPath` picks another folder. Runs with `-Unattended`, `-Scheduled` or `-SkipInteractive` create it without asking, as before.
+
 ## [2026.11.22.9](https://github.com/bryceforsm/Windows-ISO-Updater/releases/tag/2026.11.22.9) - 2026-11-22
 
 ### Added

@@ -18,7 +18,7 @@ The easiest and recommended way to run this script is by using the `Run-Windows-
 2.  **Provide an ISO:** Drop a Windows ISO into `C:\WISO-Work\Downloads`, pass one with `-IsoPath`, or drag the ISO onto `Run-Windows-ISO-Updater.bat`, which builds from it. The script does not fetch one for you unless you add `-UseFido` or `-UseMct` ([why](design-notes.md#why-the-iso-has-to-come-from-you)).
 3.  **Run the Batch File:** Double-click the `Run-Windows-ISO-Updater.bat` file.
 4.  **Administrator Prompt:** A User Account Control (UAC) window will appear asking for administrative privileges. Click **Yes**.
-5.  **Follow Prompts:** The script opens in a new window, summarizes what it will do, and asks for confirmation before building.
+5.  **Follow Prompts:** The script opens in a new window. On the first run it asks before creating its working folder (`C:\WISO-Work`, or your `-WorkPath`), and says how much space the drive has. It then summarizes what it will do and asks for confirmation before building.
 
 ## Running with Parameters (from Command Line)
 

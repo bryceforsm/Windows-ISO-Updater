@@ -1,6 +1,6 @@
 # GENERATED FILE. Edit the files in src\ and run tools\Build-Script.ps1, because changes made here are overwritten.
 # Windows ISO Updater
-# Version: 2026.11.22.9   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
+# Version: 2026.11.22.10   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
 #
 #region Script overview
 # This script builds a fully up-to-date ("slipstreamed") Windows 11, Windows 10 or Windows Server
@@ -323,7 +323,7 @@ $script:ScriptPath = $PSCommandPath
 
 # Kept in step with the header comment by tools\Update-Version.ps1, and shown in the log and recorded in
 # the build stamp so a finished ISO can be traced back to the exact script that built it.
-$ScriptVersion = '2026.11.22.9'
+$ScriptVersion = '2026.11.22.10'
 
 # A scheduled run has nobody to answer a prompt.
 if ($Scheduled) {
@@ -577,6 +577,32 @@ $StampHistoryDir = Join-Path -Path $StampRoot -ChildPath 'History'
 $StampFile       = Join-Path -Path $StampRoot -ChildPath 'last-build.json'
 # A stamp is only written when a build succeeds, so hashes are kept here as well the moment they are read.
 $HashCacheFile   = Join-Path -Path $StampRoot -ChildPath 'hash-cache.json'
+
+#endregion
+
+#region Confirm a new working folder
+# A first run creates the working folder, which then holds tens of gigabytes. Someone running the script by hand
+# is asked first, so it never lands on a drive they did not expect. Asked here, before the log folder inside it
+# is created, and only when someone is there to answer: unattended, scheduled and -SkipInteractive runs create
+# it as before. The helper functions are not defined yet, so this uses Write-Host directly.
+if (-not $Unattended -and -not $SkipInteractive -and -not (Test-Path -LiteralPath $WorkRoot)) {
+    Write-Host ''
+    Write-Host 'Everything this tool downloads and builds goes in a working folder, which does not exist yet:' -ForegroundColor Cyan
+    Write-Host "  $WorkRoot"
+    try {
+        $WorkDrive = [System.IO.DriveInfo]::new([System.IO.Path]::GetPathRoot($WorkRoot))
+        Write-Host ('  A build needs about 50 GB there, and drive {0} has {1:N0} GB free.' -f $WorkDrive.Name.TrimEnd('\'), ($WorkDrive.AvailableFreeSpace / 1GB))
+    }
+    catch { }   # a drive that cannot be read is reported properly by the free space check later on
+    Write-Host '  To use a different folder, cancel and run again with -WorkPath.'
+    Write-Host ''
+    $Confirm = Read-Host "Type 'Y' to create it and continue, or anything else to cancel"
+    if ($Confirm -notin @('Y', 'y', 'Yes', 'yes')) {
+        Write-Host 'Cancelled. Nothing was created.' -ForegroundColor Yellow
+        exit 0
+    }
+    Write-Host ''
+}
 
 #endregion
 
