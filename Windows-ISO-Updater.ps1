@@ -1,6 +1,6 @@
 # GENERATED FILE. Edit the files in src\ and run tools\Build-Script.ps1, because changes made here are overwritten.
 # Windows ISO Updater
-# Version: 2026.11.22.5   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
+# Version: 2026.11.22.7   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
 #
 #region Script overview
 # This script builds a fully up-to-date ("slipstreamed") Windows 11, Windows 10 or Windows Server
@@ -257,6 +257,9 @@ param(
     [Parameter(HelpMessage = 'Rebuild even when the stamp says nothing has changed since the last build')]
     [switch]$Force,
 
+    [Parameter(HelpMessage = 'Do not rebuild just because the ISO from the last build is no longer where it was written, for example when it is moved to a share or deleted after it was copied somewhere else. A changed source ISO, parameter or update still triggers a rebuild')]
+    [switch]$IgnoreMissingIso,
+
     [Parameter(HelpMessage = 'Only report whether a rebuild is needed and exit without building anything. Exit code 0 = nothing to do, 10 = a rebuild is needed')]
     [switch]$CheckOnly,
 
@@ -320,7 +323,7 @@ $script:ScriptPath = $PSCommandPath
 
 # Kept in step with the header comment by tools\Update-Version.ps1, and shown in the log and recorded in
 # the build stamp so a finished ISO can be traced back to the exact script that built it.
-$ScriptVersion = '2026.11.22.5'
+$ScriptVersion = '2026.11.22.7'
 
 # A scheduled run has nobody to answer a prompt.
 if ($Scheduled) {
@@ -3103,10 +3106,14 @@ function Test-RebuildNeeded {
         $Stamp,
         [string]$SourceHash,
         [System.Collections.IDictionary]$ParameterSet,
-        [string[]]$ExpectedUpdates
+        [string[]]$ExpectedUpdates,
+        # The last build's ISO being gone is then reported but is no reason to rebuild (-IgnoreMissingIso).
+        [switch]$IgnoreMissingIso
     )
 
     $Reasons = New-Object System.Collections.Generic.List[string]
+    # Reported with the reasons, but not reasons to rebuild on their own.
+    $Notes = New-Object System.Collections.Generic.List[string]
 
     if (-not $Stamp) {
         $Reasons.Add('no previous stamp was found, so this is treated as a first build')
@@ -3130,7 +3137,7 @@ function Test-RebuildNeeded {
     if ($Stamp.Updates -and $Stamp.Updates.Catalog) { $Recorded = @($Stamp.Updates.Catalog | ForEach-Object { "$_" } | Sort-Object) }
     if ($null -eq $ExpectedUpdates) {
         # A network blip must not trigger a two-hour rebuild, so the next scheduled run will look again.
-        $Reasons.Add('the Microsoft Update Catalog could not be reached, so this run assumes nothing new has been published')
+        $Notes.Add('the Microsoft Update Catalog could not be reached, so this run assumes nothing new has been published')
     }
     elseif ($Recorded.Count -eq 0) {
         $Reasons.Add('the last stamp did not record which updates were used')
@@ -3146,12 +3153,11 @@ function Test-RebuildNeeded {
         $Reasons.Add('the last stamp does not name an output ISO')
     }
     elseif (-not (Test-Path -LiteralPath "$($Stamp.Output.Path)" -PathType Leaf)) {
-        $Reasons.Add("the ISO from the last build is gone ($($Stamp.Output.Path))")
+        if ($IgnoreMissingIso) { $Notes.Add("the ISO from the last build is gone ($($Stamp.Output.Path)), which -IgnoreMissingIso does not count as a reason to rebuild") }
+        else { $Reasons.Add("the ISO from the last build is gone ($($Stamp.Output.Path))") }
     }
 
-    # The catalog-unreachable note is informational only - on its own it is not a reason to rebuild.
-    $Blocking = @($Reasons | Where-Object { $_ -notmatch 'could not be reached' })
-    return [pscustomobject]@{ Rebuild = ($Blocking.Count -gt 0); Reasons = @($Reasons) }
+    return [pscustomobject]@{ Rebuild = ($Reasons.Count -gt 0); Reasons = @($Reasons) + @($Notes) }
 }
 
 #endregion
@@ -7174,7 +7180,7 @@ if (-not $NoStamp) {
         }
 
         $script:StampDecision = Test-RebuildNeeded -Stamp $script:PreviousStamp -SourceHash $script:StampSourceHash `
-            -ParameterSet (Get-BuildParameterSet) -ExpectedUpdates $script:ExpectedUpdateSet
+            -ParameterSet (Get-BuildParameterSet) -ExpectedUpdates $script:ExpectedUpdateSet -IgnoreMissingIso:$IgnoreMissingIso
         foreach ($Reason in $script:StampDecision.Reasons) { Write-HostTimestamp "  - $Reason" }
         if (-not $script:StampDecision.Rebuild) { Write-HostTimestamp '  Everything matches the last build.' -ForegroundColor Green }
     }
@@ -7199,7 +7205,14 @@ if (-not $NoStamp) {
         else {
             Write-HostTimestamp 'Nothing has changed since the last build, so this run has nothing to do.' -ForegroundColor Green
             if ($script:PreviousStamp -and $script:PreviousStamp.Output) {
-                Write-HostTimestamp "The ISO from that build is still current: $($script:PreviousStamp.Output.Path)" -ForegroundColor Green
+                $LastIso = "$($script:PreviousStamp.Output.Path)"
+                if (Test-Path -LiteralPath $LastIso -PathType Leaf) {
+                    Write-HostTimestamp "The ISO from that build is still current: $LastIso" -ForegroundColor Green
+                }
+                else {
+                    # Only -IgnoreMissingIso gets here with the ISO gone.
+                    Write-HostTimestamp "The ISO from that build is still current, though it is no longer at $LastIso."
+                }
             }
             Write-HostTimestamp 'Use -Force to build anyway.'
             if ($AutoClean) {
@@ -7251,17 +7264,20 @@ try {
                 throw 'The ISO is still mounted from a previous attempt and could not be dismounted. Aborting.'
             }
         }
+        # Script scope is where this section runs, so the catch and finally below see the mount even when a
+        # line after it throws.
         $script:MountedImage = Mount-DiskImage -ImagePath $ResolvedIso -PassThru -ErrorAction Stop
         Start-Sleep -Seconds 2
-    }
-    $MountedImage = $script:MountedImage
 
-    $DriveLetter = ($MountedImage | Get-Volume -ErrorAction SilentlyContinue).DriveLetter
-    if (-not $DriveLetter) {
-        $DriveLetter = (Get-DiskImage -ImagePath $ResolvedIso | Get-Volume -ErrorAction SilentlyContinue).DriveLetter
+        $Letter = ($script:MountedImage | Get-Volume -ErrorAction SilentlyContinue).DriveLetter
+        if (-not $Letter) {
+            $Letter = (Get-DiskImage -ImagePath $ResolvedIso | Get-Volume -ErrorAction SilentlyContinue).DriveLetter
+        }
+        if (-not $Letter) { throw 'Could not determine the drive letter of the mounted ISO.' }
+        $script:DriveLetter = $Letter
+        # Inside the step, so it is reported with the step rather than on its own after it.
+        Write-HostTimestamp "  ISO mounted at $($Letter):\" -ForegroundColor Green
     }
-    if (-not $DriveLetter) { throw 'Could not determine the drive letter of the mounted ISO.' }
-    Write-HostTimestamp "  ISO mounted at $($DriveLetter):\" -ForegroundColor Green
 
     if (-not (Test-Path -LiteralPath "$($DriveLetter):\sources\install.wim") -and
         -not (Test-Path -LiteralPath "$($DriveLetter):\sources\install.esd")) {
@@ -7277,6 +7293,10 @@ try {
         # robocopy exit codes 0-7 indicate success, while 8+ indicates a real failure.
         if ($LASTEXITCODE -ge 8) { throw "robocopy failed to copy the ISO contents (exit code $LASTEXITCODE)." }
         Write-HostTimestamp '  Extraction complete.' -ForegroundColor Green
+        # Dismounted here, so it is reported as part of the step. The finally below only cleans up after a failure.
+        Dismount-DiskImage -ImagePath $ResolvedIso -ErrorAction SilentlyContinue | Out-Null
+        $script:MountedImage = $null
+        Write-HostTimestamp '  Dismounted the source ISO.'
     }
 }
 catch {
@@ -7286,12 +7306,8 @@ catch {
     exit 1
 }
 finally {
-    if ($MountedImage) {
-        Dismount-DiskImage -ImagePath $ResolvedIso -ErrorAction SilentlyContinue | Out-Null
-        Write-HostTimestamp '  Dismounted the source ISO.'
-    }
+    if ($MountedImage) { Dismount-DiskImage -ImagePath $ResolvedIso -ErrorAction SilentlyContinue | Out-Null }
 }
-Write-Host $LineBreak
 
 # The copied wim files inherit the read-only attribute from the optical media, so clear it to let DISM
 # mount and commit changes.

@@ -186,6 +186,9 @@ param(
     [Parameter(HelpMessage = 'Rebuild even when the stamp says nothing has changed since the last build')]
     [switch]$Force,
 
+    [Parameter(HelpMessage = 'Do not rebuild just because the ISO from the last build is no longer where it was written, for example when it is moved to a share or deleted after it was copied somewhere else. A changed source ISO, parameter or update still triggers a rebuild')]
+    [switch]$IgnoreMissingIso,
+
     [Parameter(HelpMessage = 'Only report whether a rebuild is needed and exit without building anything. Exit code 0 = nothing to do, 10 = a rebuild is needed')]
     [switch]$CheckOnly,
 

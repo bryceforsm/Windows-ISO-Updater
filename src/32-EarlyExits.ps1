@@ -248,7 +248,7 @@ if (-not $NoStamp) {
         }
 
         $script:StampDecision = Test-RebuildNeeded -Stamp $script:PreviousStamp -SourceHash $script:StampSourceHash `
-            -ParameterSet (Get-BuildParameterSet) -ExpectedUpdates $script:ExpectedUpdateSet
+            -ParameterSet (Get-BuildParameterSet) -ExpectedUpdates $script:ExpectedUpdateSet -IgnoreMissingIso:$IgnoreMissingIso
         foreach ($Reason in $script:StampDecision.Reasons) { Write-HostTimestamp "  - $Reason" }
         if (-not $script:StampDecision.Rebuild) { Write-HostTimestamp '  Everything matches the last build.' -ForegroundColor Green }
     }
@@ -273,7 +273,14 @@ if (-not $NoStamp) {
         else {
             Write-HostTimestamp 'Nothing has changed since the last build, so this run has nothing to do.' -ForegroundColor Green
             if ($script:PreviousStamp -and $script:PreviousStamp.Output) {
-                Write-HostTimestamp "The ISO from that build is still current: $($script:PreviousStamp.Output.Path)" -ForegroundColor Green
+                $LastIso = "$($script:PreviousStamp.Output.Path)"
+                if (Test-Path -LiteralPath $LastIso -PathType Leaf) {
+                    Write-HostTimestamp "The ISO from that build is still current: $LastIso" -ForegroundColor Green
+                }
+                else {
+                    # Only -IgnoreMissingIso gets here with the ISO gone.
+                    Write-HostTimestamp "The ISO from that build is still current, though it is no longer at $LastIso."
+                }
             }
             Write-HostTimestamp 'Use -Force to build anyway.'
             if ($AutoClean) {
