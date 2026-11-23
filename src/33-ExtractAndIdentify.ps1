@@ -29,17 +29,20 @@ try {
                 throw 'The ISO is still mounted from a previous attempt and could not be dismounted. Aborting.'
             }
         }
+        # Script scope is where this section runs, so the catch and finally below see the mount even when a
+        # line after it throws.
         $script:MountedImage = Mount-DiskImage -ImagePath $ResolvedIso -PassThru -ErrorAction Stop
         Start-Sleep -Seconds 2
-    }
-    $MountedImage = $script:MountedImage
 
-    $DriveLetter = ($MountedImage | Get-Volume -ErrorAction SilentlyContinue).DriveLetter
-    if (-not $DriveLetter) {
-        $DriveLetter = (Get-DiskImage -ImagePath $ResolvedIso | Get-Volume -ErrorAction SilentlyContinue).DriveLetter
+        $Letter = ($script:MountedImage | Get-Volume -ErrorAction SilentlyContinue).DriveLetter
+        if (-not $Letter) {
+            $Letter = (Get-DiskImage -ImagePath $ResolvedIso | Get-Volume -ErrorAction SilentlyContinue).DriveLetter
+        }
+        if (-not $Letter) { throw 'Could not determine the drive letter of the mounted ISO.' }
+        $script:DriveLetter = $Letter
+        # Inside the step, so it is reported with the step rather than on its own after it.
+        Write-HostTimestamp "  ISO mounted at $($Letter):\" -ForegroundColor Green
     }
-    if (-not $DriveLetter) { throw 'Could not determine the drive letter of the mounted ISO.' }
-    Write-HostTimestamp "  ISO mounted at $($DriveLetter):\" -ForegroundColor Green
 
     if (-not (Test-Path -LiteralPath "$($DriveLetter):\sources\install.wim") -and
         -not (Test-Path -LiteralPath "$($DriveLetter):\sources\install.esd")) {
@@ -55,6 +58,10 @@ try {
         # robocopy exit codes 0-7 indicate success, while 8+ indicates a real failure.
         if ($LASTEXITCODE -ge 8) { throw "robocopy failed to copy the ISO contents (exit code $LASTEXITCODE)." }
         Write-HostTimestamp '  Extraction complete.' -ForegroundColor Green
+        # Dismounted here, so it is reported as part of the step. The finally below only cleans up after a failure.
+        Dismount-DiskImage -ImagePath $ResolvedIso -ErrorAction SilentlyContinue | Out-Null
+        $script:MountedImage = $null
+        Write-HostTimestamp '  Dismounted the source ISO.'
     }
 }
 catch {
@@ -64,12 +71,8 @@ catch {
     exit 1
 }
 finally {
-    if ($MountedImage) {
-        Dismount-DiskImage -ImagePath $ResolvedIso -ErrorAction SilentlyContinue | Out-Null
-        Write-HostTimestamp '  Dismounted the source ISO.'
-    }
+    if ($MountedImage) { Dismount-DiskImage -ImagePath $ResolvedIso -ErrorAction SilentlyContinue | Out-Null }
 }
-Write-Host $LineBreak
 
 # The copied wim files inherit the read-only attribute from the optical media, so clear it to let DISM
 # mount and commit changes.
