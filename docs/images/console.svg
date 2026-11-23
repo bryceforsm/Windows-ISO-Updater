@@ -9,10 +9,10 @@
   <g stroke="#CCCCCC" stroke-width="1" fill="none"><path d="M683 17h10"/><rect x="729" y="12" width="9" height="9"/><path d="M775 12l9 9M784 12l-9 9"/></g>
   <g font-family="Cascadia Mono, Consolas, Menlo, DejaVu Sans Mono, monospace" font-size="13">
     <text x="14" y="61"><tspan fill="#CCCCCC">PS&#160;C:\WISO&gt;&#160;</tspan><tspan fill="#F9F1A5">.\Windows-ISO-Updater.ps1</tspan><tspan fill="#767676">&#160;-Unattended</tspan></text>
-    <text x="14" y="95" fill="#61D6D6">[09:12:03]&#160;&#160;&#160;Windows&#160;ISO&#160;Updater&#160;v2026.11.22.9&#160;(slipstream&#160;latest&#160;updates&#160;into&#160;a&#160;new&#160;ISO)&#160;on</text>
+    <text x="14" y="95" fill="#61D6D6">[09:12:03]&#160;&#160;&#160;Windows&#160;ISO&#160;Updater&#160;v2026.11.22.10&#160;(slipstream&#160;latest&#160;updates&#160;into&#160;a&#160;new&#160;ISO)&#160;on</text>
     <text x="14" y="112" fill="#61D6D6">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;LAB-BUILD01</text>
     <text x="14" y="129" fill="#CCCCCC">[09:12:03]&#160;&#160;&#160;Run&#160;date&#160;&#160;&#160;&#160;&#160;&#160;&#160;:&#160;October&#160;14th&#160;2026</text>
-    <text x="14" y="146" fill="#16C60C">[09:12:03]&#160;&#x2713;&#160;Version&#160;check&#160;&#160;:&#160;v2026.11.22.9&#160;is&#160;the&#160;latest&#160;release</text>
+    <text x="14" y="146" fill="#16C60C">[09:12:03]&#160;&#x2713;&#160;Version&#160;check&#160;&#160;:&#160;v2026.11.22.10&#160;is&#160;the&#160;latest&#160;release</text>
     <text x="14" y="180" fill="#CCCCCC">[09:12:03]&#160;&#160;&#160;Free&#160;space&#160;on&#160;the&#160;working&#160;drive:&#160;412&#160;GB</text>
     <text x="14" y="214" fill="#16C60C">[09:12:03]&#160;&#x2713;&#160;An&#160;ISO&#160;is&#160;already&#160;downloaded&#160;-&#160;reusing&#160;it:</text>
     <text x="14" y="231" fill="#16C60C">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;C:\WISO-Work\Downloads\Win11_25H2_English_x64.iso&#160;(7.31&#160;GB)</text>
