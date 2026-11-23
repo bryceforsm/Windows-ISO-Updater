@@ -1,5 +1,6 @@
 #region Recompile the ISO with oscdimg
-Invoke-Task -Description "Recompiling the bootable ISO to $BuildIsoPath ..." -ScriptBlock {
+Invoke-Task -Description 'Recompiling the bootable ISO...' -ScriptBlock {
+    Write-HostTimestamp "  Writing to: $BuildIsoPath"
     # Remove any leftover ISO at the target path from a previous run so oscdimg starts clean.
     if (Test-Path -LiteralPath $BuildIsoPath) { Remove-Item -LiteralPath $BuildIsoPath -Force -ErrorAction SilentlyContinue }
 
@@ -18,19 +19,11 @@ Invoke-Task -Description "Recompiling the bootable ISO to $BuildIsoPath ..." -Sc
     $OscdimgArgs += @($ExtractDir, $BuildIsoPath)
     Write-HostTimestamp "  Volume label: $IsoVolumeLabel"
 
-    # Run oscdimg and wait for it to finish, then verify it actually produced the ISO.
-    Write-HostTimestamp "  Running: `"$Oscdimg`" $($OscdimgArgs -join ' ')"
-    $Proc = Start-Process -FilePath $Oscdimg -ArgumentList $OscdimgArgs -Wait -PassThru -NoNewWindow -ErrorAction Stop
-    if ($Proc.ExitCode -ne 0) {
-        # A non-zero exit code means oscdimg failed to build the image.
-        throw "oscdimg returned exit code $($Proc.ExitCode)."
-    }
-    if (-not (Test-Path -LiteralPath $BuildIsoPath)) {
-        # Guard against the rare case where oscdimg exits 0 but no file was written.
-        throw 'oscdimg reported success but the output ISO was not created.'
-    }
+    # Throws if oscdimg fails or writes nothing. The full command and oscdimg's own output go to the .log.
+    $OscdimgSummary = Invoke-Oscdimg -FilePath $Oscdimg -ArgumentList $OscdimgArgs -Destination $BuildIsoPath
     $SizeGB = [math]::Round((Get-Item -LiteralPath $BuildIsoPath).Length / 1GB, 2)
-    Write-HostTimestamp "  New ISO created ($SizeGB GB)." -ForegroundColor Green
+    $Written = Format-OscdimgSummary -Summary $OscdimgSummary
+    Write-HostTimestamp "  New ISO created ($SizeGB GB)$(if ($Written) { ": $Written" })." -ForegroundColor Green
 }
 
 # One sequential copy at the end, rather than oscdimg writing across the wire for the length of the build.

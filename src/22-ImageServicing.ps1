@@ -123,13 +123,18 @@ function Invoke-WatchedProcess {
         [int]$Indent = 0
     )
 
+    # A file the program has yet to create counts from nothing, so it is shown growing once it appears.
     $StartSize = $null
-    if ($WatchFile -and (Test-Path -LiteralPath $WatchFile -PathType Leaf)) { $StartSize = (Get-Item -LiteralPath $WatchFile).Length }
+    if ($WatchFile) { $StartSize = if (Test-Path -LiteralPath $WatchFile -PathType Leaf) { (Get-Item -LiteralPath $WatchFile).Length } else { [long]0 } }
     $OutFile = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath ('wiso_' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.out')
     $ErrFile = "$OutFile.err"
     $Progress = New-ProgressLine -Indent $Indent
-    $ReadFrom = [long]0
-    $Pending = ''
+    # Both streams are read, because some programs print their percentage to stderr: oscdimg's "42% complete"
+    # goes there while everything else it says goes to stdout.
+    $Streams = @(
+        @{ Path = $OutFile; ReadFrom = [long]0; Pending = '' }
+        @{ Path = $ErrFile; ReadFrom = [long]0; Pending = '' }
+    )
     $Percent = $null
     $Stage = $null
     $StageFrom = [long]0
@@ -147,33 +152,35 @@ function Invoke-WatchedProcess {
             # Whatever the program has printed since the last look. The last piece may be a line still being
             # written, so it is held back until the next look completes it.
             if ($GetPercent -or $GetStage) {
-                try {
-                    $Stream = [System.IO.File]::Open($OutFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+                foreach ($Source in $Streams) {
                     try {
-                        [void]$Stream.Seek($ReadFrom, [System.IO.SeekOrigin]::Begin)
-                        $Bytes = New-Object byte[] ([int][math]::Min(1MB, $Stream.Length - $ReadFrom))
-                        $Count = $Stream.Read($Bytes, 0, $Bytes.Length)
-                        $ReadFrom += $Count
-                    }
-                    finally { $Stream.Dispose() }
-                    # A program writing UTF-16 leaves a NUL after every character, which would hide the digits.
-                    $Pieces = ($Pending + [System.Text.Encoding]::ASCII.GetString($Bytes, 0, $Count).Replace([string][char]0, '')) -split '[\r\n]'
-                    $Pending = $Pieces[-1]
-                    for ($i = 0; $i -lt $Pieces.Count - 1; $i++) {
-                        # A new stage starts its own bar from 0%, so the last stage's percentage is dropped, and
-                        # from the second stage on, only what that stage itself writes is counted.
-                        $NewStage = if ($GetStage) { & $GetStage $Pieces[$i] } else { $null }
-                        if ($NewStage -and $NewStage -ne $Stage) {
-                            if ($Stage) { $StageFrom = $Written }
-                            $Stage = $NewStage
-                            $Percent = $null
-                            continue
+                        $Stream = [System.IO.File]::Open($Source.Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+                        try {
+                            [void]$Stream.Seek($Source.ReadFrom, [System.IO.SeekOrigin]::Begin)
+                            $Bytes = New-Object byte[] ([int][math]::Min(1MB, $Stream.Length - $Source.ReadFrom))
+                            $Count = $Stream.Read($Bytes, 0, $Bytes.Length)
+                            $Source.ReadFrom += $Count
                         }
-                        $Found = if ($GetPercent) { & $GetPercent $Pieces[$i] } else { $null }
-                        if ($null -ne $Found) { $Percent = $Found }
+                        finally { $Stream.Dispose() }
+                        # A program writing UTF-16 leaves a NUL after every character, which would hide the digits.
+                        $Pieces = ($Source.Pending + [System.Text.Encoding]::ASCII.GetString($Bytes, 0, $Count).Replace([string][char]0, '')) -split '[\r\n]'
+                        $Source.Pending = $Pieces[-1]
+                        for ($i = 0; $i -lt $Pieces.Count - 1; $i++) {
+                            # A new stage starts its own bar from 0%, so the last stage's percentage is dropped, and
+                            # from the second stage on, only what that stage itself writes is counted.
+                            $NewStage = if ($GetStage) { & $GetStage $Pieces[$i] } else { $null }
+                            if ($NewStage -and $NewStage -ne $Stage) {
+                                if ($Stage) { $StageFrom = $Written }
+                                $Stage = $NewStage
+                                $Percent = $null
+                                continue
+                            }
+                            $Found = if ($GetPercent) { & $GetPercent $Pieces[$i] } else { $null }
+                            if ($null -ne $Found) { $Percent = $Found }
+                        }
                     }
+                    catch { }
                 }
-                catch { }
             }
             $Elapsed = Format-Duration ((Get-Date) - $Progress.Start)
             $Grown = $Written - $StageFrom

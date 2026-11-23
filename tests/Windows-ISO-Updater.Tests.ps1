@@ -10,7 +10,8 @@ BeforeAll {
         'Resolve-EditionIndexes', 'Search-UpdateCatalog', 'Select-DefaultEditions', 'Select-HotpatchBaselineEntry', 'Test-FidoUrl', 'Test-IsHotpatchBaseline',
         'Test-MicrosoftDownloadUrl', 'Test-RebuildNeeded', 'Test-SameWriteTime', 'Test-UpdatePackageFile',
         'Compare-ScriptVersion', 'Receive-VersionCheck', 'Write-VersionCheckResult',
-        'Get-ConsoleStyleSet', 'Get-ConsoleSymbol', 'Format-StepHeader', 'Format-SummaryBox'
+        'Get-ConsoleStyleSet', 'Get-ConsoleSymbol', 'Format-StepHeader', 'Format-SummaryBox',
+        'Get-OscdimgSummary', 'Get-OscdimgLogLines', 'Format-OscdimgSummary'
     )
     foreach ($Name in $Names) {
         $Definition = $Ast.Find({
@@ -1358,5 +1359,57 @@ Describe 'Format-SummaryBox' {
     It 'fits a title longer than every row' {
         $Lines = @(Format-SummaryBox -Title 'A much longer title than any row' -Rows ([ordered]@{ 'A' = 'b' }) -Width 120 -Style (Get-ConsoleStyleSet -CodePage 65001))
         @($Lines | ForEach-Object { $_.Length } | Select-Object -Unique).Count | Should -Be 1
+    }
+}
+
+Describe 'Reading oscdimg output' {
+    BeforeAll {
+        # What oscdimg 2.56 printed for a real build: stdout, then stderr, whose percentages end in carriage returns.
+        $script:OscdimgOutput = @(
+            ''
+            'OSCDIMG 2.56 CD-ROM and DVD-ROM Premastering Utility'
+            'Copyright (C) Microsoft, 1993-2012. All rights reserved.'
+            'Licensed only for producing Microsoft authorized content.'
+            ''
+            'Scanning source tree complete (985 files in 98 directories)'
+            'Computing directory information complete'
+            'Image file is 8879472640 bytes (before optimization)'
+            'Writing 985 files in 98 directories to C:\WISO-Work\Output\Win11.iso'
+            'Storage optimization saved 26 files, 17432576 bytes (1% of image)'
+            'After optimization, image file is 8864307200 bytes'
+            'Space saved because of embedding, sparseness or optimization = 17432576'
+            'Done.'
+            "0% complete`r1% complete`r2% complete`r99% complete`r0% complete`r99% complete`r100% complete`r"
+        )
+    }
+
+    It 'reads the file count and what de-duplication saved' {
+        $Summary = Get-OscdimgSummary -Output $script:OscdimgOutput
+        $Summary.Files | Should -Be 985
+        $Summary.Directories | Should -Be 98
+        $Summary.SavedBytes | Should -Be 17432576
+        $Summary.SavedPercent | Should -Be 1
+        $Summary.Error | Should -BeNullOrEmpty
+    }
+
+    It 'picks out the first error' {
+        (Get-OscdimgSummary -Output @('Scanning source tree', 'ERROR: Could not delete existing file "C:\x.iso"', 'ERROR: second')).Error | Should -Be 'Could not delete existing file "C:\x.iso"'
+    }
+
+    It 'keeps the banner, empty lines and percentages out of the log' {
+        $Lines = @(Get-OscdimgLogLines -Output $script:OscdimgOutput)
+        $Lines | Should -Not -Contain ''
+        ($Lines | Where-Object { $_ -match 'complete$' -and $_ -match '^\d' }) | Should -BeNullOrEmpty
+        ($Lines | Where-Object { $_ -match 'OSCDIMG|Copyright|Licensed' }) | Should -BeNullOrEmpty
+        $Lines[0] | Should -Be 'Scanning source tree complete (985 files in 98 directories)'
+        $Lines[-1] | Should -Be 'Done.'
+    }
+
+    It 'sums it up in one line' {
+        Format-OscdimgSummary -Summary (Get-OscdimgSummary -Output $script:OscdimgOutput) | Should -Be '985 files in 98 directories, 17 MB saved by writing identical files once'
+    }
+
+    It 'says nothing about what it cannot read' {
+        Format-OscdimgSummary -Summary (Get-OscdimgSummary -Output @('Done.')) | Should -Be ''
     }
 }

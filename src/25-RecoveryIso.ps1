@@ -65,10 +65,7 @@ function New-RecoveryIso {
     $BootData = Get-OscdimgBootData -MediaRoot $RecoveryRoot
     if (-not $BootData) { throw 'the media has no boot sectors, so a recovery ISO built from it would not boot' }
     $RecoveryArgs = @('-m', '-o', '-u2', '-udfver102', "-l$Label", "-bootdata:$BootData", $RecoveryRoot, $BuildTarget)
-    Write-HostTimestamp "  Running: `"$Oscdimg`" $($RecoveryArgs -join ' ')"
-    $Proc = Start-Process -FilePath $Oscdimg -ArgumentList $RecoveryArgs -Wait -PassThru -NoNewWindow -ErrorAction Stop
-    if ($Proc.ExitCode -ne 0) { throw "oscdimg returned exit code $($Proc.ExitCode)" }
-    if (-not (Test-Path -LiteralPath $BuildTarget)) { throw 'oscdimg reported success but no ISO was written' }
+    $null = Invoke-Oscdimg -FilePath $Oscdimg -ArgumentList $RecoveryArgs -Destination $BuildTarget
     if ($TargetIsRemote) {
         Copy-LargeFile -Path $BuildTarget -Destination $Target
         Remove-Item -LiteralPath $BuildTarget -Force -ErrorAction SilentlyContinue
