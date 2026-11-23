@@ -50,7 +50,7 @@ else {
         Write-HostTimestamp "Neither this script nor the image itself could name the release build $ImageBuild belongs to, so there is no catalog query that can identify this media." -ForegroundColor Red
         Write-HostTimestamp '  Searching on the product name alone would return an update for a different Server release, which DISM would refuse to apply, so this run stops here.' -ForegroundColor Red
         Write-HostTimestamp '  Supply the packages yourself with -UpdatePath, or use -SkipUpdates to repack the media unchanged.' -ForegroundColor Yellow
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
     if (-not $FeatureName) {
@@ -100,7 +100,7 @@ else {
         $Patched = if ($script:OfflineLcuCapRecord -and $script:OfflineLcuCapRecord.Status -ne 'Ignored') { 'as far as an offline update can take it' } else { 'fully patched' }
         Write-HostTimestamp "The image is already $Patched ($script:LcuUpToDate), so no cumulative update is needed." -ForegroundColor Green
         Add-ServicingResult -Image 'install.wim, boot.wim, winre.wim and the media sources folder' -Package 'Cumulative, .NET, Setup and Safe OS Dynamic Updates' -Result 'Skipped' -Detail "The media is already at $script:LcuUpToDate, so it is left as it shipped"
-        Write-HostTimestamp '  The .NET update, both Dynamic Updates and boot.wim are left exactly as the media shipped them, so its Setup files stay matched to its images. Use -ReapplyUpdates to integrate everything anyway.' -ForegroundColor DarkGray
+        Write-HostTimestamp '  The .NET update, both Dynamic Updates and boot.wim are left exactly as the media shipped them, so its Setup files stay matched to its images. Use -ReapplyUpdates to integrate everything anyway.'
         Write-Host $LineBreak
     }
     elseif ($script:LcuSkippedBaselineOnly) {
@@ -109,7 +109,7 @@ else {
     }
     else {
         Write-HostTimestamp 'Could not obtain a cumulative update from the catalog. You can supply one with -UpdatePath, or use -SkipUpdates to just recompile the ISO.' -ForegroundColor Red
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
 
@@ -144,7 +144,7 @@ else {
         if (-not $script:SetupDu) {
             Write-HostTimestamp '  No Setup Dynamic Update was found. The media Setup files will only be refreshed from boot.wim, which can make Windows Setup fail on the finished ISO.' -ForegroundColor Yellow
             if ($script:EffectiveServer) {
-                Write-HostTimestamp '  Microsoft does not publish one for every Server release, so this can be expected on older Server media.' -ForegroundColor DarkGray
+                Write-HostTimestamp '  Microsoft does not publish one for every Server release, so this can be expected on older Server media.'
             }
             Write-Host $LineBreak
         }

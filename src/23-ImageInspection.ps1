@@ -110,7 +110,7 @@ function Show-FinalImageInfo {
     $Images = $null
     try { $Images = @(Get-WindowsImage -ImagePath $WimPath -ErrorAction Stop) } catch { }
     if (-not $Images -or $Images.Count -eq 0) {
-        Write-HostTimestamp '  Could not read the final image information.' -ForegroundColor DarkGray
+        Write-HostTimestamp '  Could not read the final image information.'
         return
     }
 

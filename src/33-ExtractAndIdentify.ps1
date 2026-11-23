@@ -60,13 +60,13 @@ try {
 catch {
     Write-HostTimestamp "Could not extract the ISO: $($_.Exception.Message)" -ForegroundColor Red
     if ($MountedImage) { Dismount-DiskImage -ImagePath $ResolvedIso -ErrorAction SilentlyContinue | Out-Null }
-    Stop-Transcript | Out-Null
+    Stop-RunLogging | Out-Null
     exit 1
 }
 finally {
     if ($MountedImage) {
         Dismount-DiskImage -ImagePath $ResolvedIso -ErrorAction SilentlyContinue | Out-Null
-        Write-HostTimestamp '  Dismounted the source ISO.' -ForegroundColor DarkGray
+        Write-HostTimestamp '  Dismounted the source ISO.'
     }
 }
 Write-Host $LineBreak
@@ -125,7 +125,7 @@ if (-not (Test-Path -LiteralPath $InstallWimExtracted) -and (Test-Path -LiteralP
 
 if (-not (Test-Path -LiteralPath $InstallWimExtracted)) {
     Write-HostTimestamp 'No editable install.wim is present after extraction. Cannot continue.' -ForegroundColor Red
-    Stop-Transcript | Out-Null
+    Stop-RunLogging | Out-Null
     exit 1
 }
 
@@ -185,7 +185,7 @@ if ($ImageBuild -gt 0 -and $ImageBuild -lt 10240) {
     if ($WillService) {
         Write-HostTimestamp '  DISM on this host cannot service an image that old, and the Microsoft Update Catalog has no cumulative update for it, so this run stops here.' -ForegroundColor Red
         Write-HostTimestamp '  Re-run with -SkipUpdates and without -DriverPath to repack the media unchanged, which still applies -UnattendPath, -ExtraFilesPath and the new volume label.' -ForegroundColor Yellow
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
     Write-HostTimestamp '  Nothing will be serviced, so no image is mounted and the media is only repacked.' -ForegroundColor Yellow
@@ -199,7 +199,7 @@ if (-not $NoStamp -and $script:ExpectedUpdateFor -ne "$FeatureName|$CatalogArch"
     Invoke-Task -Description 'Checking which updates the Microsoft Update Catalog is offering for this image...' -ScriptBlock {
         $script:ExpectedUpdateSet = Get-ExpectedUpdateSet -FeatureName $FeatureName -CatalogArch $CatalogArch -Build $ImageBuild
         $script:ExpectedUpdateFor = "$FeatureName|$CatalogArch"
-        if ($script:ExpectedUpdateSet) { Write-HostTimestamp "  $($script:ExpectedUpdateSet -join ', ')" -ForegroundColor DarkGray }
+        if ($script:ExpectedUpdateSet) { Write-HostTimestamp "  $($script:ExpectedUpdateSet -join ', ')" }
     }
 }
 

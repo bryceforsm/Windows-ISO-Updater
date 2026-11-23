@@ -5,7 +5,7 @@
 .DESCRIPTION
     A real build needs administrator rights, an ISO and the best part of an hour, so the README image is
     drawn from a scripted transcript instead. The lines below copy the messages the script prints, in the
-    same [MM/dd/yyyy|HH:mm:ss] format and console colors, inside a Windows Terminal style frame.
+    same [HH:mm:ss] format and console colors, inside a Windows Terminal style frame.
 
     The clock is fixed and only moves when the transcript says so, and each step's "Step finished in" line,
     the longest step and the total run time are worked out from that clock. Rendering the same transcript twice gives
@@ -53,7 +53,7 @@ $script:Steps = [System.Collections.Generic.List[psobject]]::new()
 # Durations and line wrapping come from the script itself, lifted out of its AST the way tests\ does, so the
 # picture wraps and times exactly as a real run would. The script is never run.
 $ScriptAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path -Path $RepoRoot -ChildPath 'Windows-ISO-Updater.ps1'), [ref]$null, [ref]$null)
-foreach ($Name in 'Format-Duration', 'Format-WrappedText') {
+foreach ($Name in 'Format-Duration', 'Format-WrappedText', 'Get-ConsoleStyleSet', 'Get-ConsoleSymbol', 'Format-StepHeader', 'Format-SummaryBox') {
     $Definition = $ScriptAst.Find({
             param($Node)
             $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -eq $Name
@@ -70,17 +70,24 @@ function Add-Raw {
     }
 }
 
-# Write-HostTimestamp. -Wait moves the clock forward before the line is stamped.
+# The characters the script draws with in Windows Terminal, which the frame below pictures.
+$script:Style = Get-ConsoleStyleSet -CodePage 437 -WindowsTerminal $true -VirtualTerminal $true
+
+# Write-HostTimestamp. -Wait moves the clock forward before the line is stamped. The symbol comes from the
+# color, as it does in the script, unless -Symbol gives one.
 function Add-Line {
-    param([string]$Text, [string]$Color = 'Gray', [double]$Wait = 0)
+    param([string]$Text, [string]$Color = 'Gray', [double]$Wait = 0, [string]$Symbol)
     $script:Clock = $script:Clock.AddSeconds($Wait)
-    $Stamp = $script:Clock.ToString('[MM/dd/yyyy|HH:mm:ss]', [System.Globalization.CultureInfo]::InvariantCulture)
-    # The same indent Write-HostTimestamp works out: under the message, including its own leading spaces.
-    $Indent = $Stamp.Length + 1 + ($Text.Length - $Text.TrimStart().Length)
-    Add-Raw -Text "$Stamp $Text" -Color $Color -Indent $Indent
+    $Stamp = $script:Clock.ToString('[HH:mm:ss]', [System.Globalization.CultureInfo]::InvariantCulture)
+    if (-not $PSBoundParameters.ContainsKey('Symbol')) { $Symbol = Get-ConsoleSymbol -Color $Color -Style $script:Style }
+    # The same layout and indent Write-HostTimestamp works out: the symbol just before the text, and
+    # continuations under the message.
+    $Lead = $Text.Length - $Text.TrimStart().Length
+    Add-Raw -Text ("$Stamp " + $Text.Substring(0, $Lead) + "$Symbol " + $Text.TrimStart()) -Color $Color -Indent ($Stamp.Length + 1 + $Lead + 2)
 }
 
-function Add-Rule { Add-Raw -Text ('-' * $Columns) }
+# The script's $LineBreak, an empty line between sections.
+function Add-Rule { Add-Raw }
 
 # A PowerShell prompt, coloured the way PSReadLine colours what is typed after it. Each segment is a piece
 # of text and its console colour, and the whole line has to fit in -Columns.
@@ -89,15 +96,15 @@ function Add-Prompt {
     $script:Lines.Add([pscustomobject]@{ Text = (($Segments | ForEach-Object { $_[0] }) -join ''); Color = 'Gray'; Segments = $Segments })
 }
 
-# Invoke-Task: the description, whatever the step prints, then its duration and a rule.
+# Invoke-Task: the step's heading, whatever the step prints, then its duration and an empty line.
 function Add-Step {
     param([string]$Description, [scriptblock]$Body, [double]$Wait = 0)
-    Add-Line $Description -Wait $Wait
+    Add-Line (Format-StepHeader -Text $Description -Width $Columns -Rule $script:Style.Rule -PrefixLength 13) -Color Cyan -Symbol $script:Style.Rule -Wait $Wait
     $Start = $script:Clock
     & $Body
     $Elapsed = $script:Clock - $Start
     $script:Steps.Add([pscustomobject]@{ Description = $Description; Duration = $Elapsed })
-    Add-Line "  Step finished in $(Format-Duration $Elapsed)." -Color DarkGray
+    Add-Line "  Step finished in $(Format-Duration $Elapsed)."
     Add-Rule
 }
 #endregion
@@ -113,6 +120,7 @@ Add-Prompt @(@('PS C:\WISO> ', 'Gray'), @('.\Windows-ISO-Updater.ps1', 'Yellow')
 Add-Rule
 Add-Line "Windows ISO Updater v$Version (slipstream latest updates into a new ISO) on LAB-BUILD01" -Color Cyan
 Add-Line 'Run date       : October 14th 2026'
+Add-Line "Version check  : v$Version is the latest release" -Color Green
 Add-Rule
 Add-Line 'Free space on the working drive: 412 GB'
 Add-Rule
@@ -120,7 +128,7 @@ Add-Line "An ISO is already downloaded - reusing it: $Iso (7.31 GB)" -Color Gree
 Add-Rule
 Add-Step "Extracting the ISO contents to C:\WISO-Work\Extract ..." {
     Add-Line '  Extraction complete.' -Color Green -Wait 94
-    Add-Line '  Dismounted the source ISO.' -Color DarkGray -Wait 1
+    Add-Line '  Dismounted the source ISO.' -Wait 1
 }
 Add-Line 'Image build    : 10.0.26200.6584 (25H2)'
 Add-Line 'Image arch     : amd64'
@@ -141,20 +149,29 @@ Add-Step 'Servicing install.wim index 3 (Windows 11 Pro)...' {
 Add-Step 'Servicing boot.wim index 2 (Microsoft Windows Setup (amd64))...' {
     Add-Line '    boot.wim index 2 done.' -Color Green -Wait 263
 }
-Add-Step "Recompiling the bootable ISO to $Output ..." {
-    Add-Line '  Volume label: W11_25H2_X64_2610' -Color DarkGray -Wait 1
-    Add-Line '  New ISO created (6.84 GB).' -Color Green -Wait 171
+Add-Step 'Recompiling the bootable ISO...' {
+    Add-Line "  Writing to: $Output"
+    Add-Line '  Volume label: W11_25H2_X64_2610' -Wait 1
+    Add-Line '  New ISO created (6.84 GB): 982 files in 98 directories, 17 MB saved by writing identical files once.' -Color Green -Wait 171
 }
 
 # The real run prints a per-step timing table here. It is left out to keep the image a sensible height.
 $Slowest = $script:Steps | Sort-Object -Property Duration -Descending | Select-Object -First 1
-Add-Line "Longest step: $($Slowest.Description) ($(Format-Duration $Slowest.Duration))" -Color DarkGray
+Add-Line "Longest step: $($Slowest.Description) ($(Format-Duration $Slowest.Duration))"
 $Finished = $script:Clock.AddSeconds(2)
 Add-Line ('Total run time: {0} (started {1}, finished {2})' -f (Format-Duration ($Finished - $script:RunStart)), $script:RunStart.ToString('HH:mm:ss'), $Finished.ToString('HH:mm:ss')) -Color Cyan -Wait 2
 Add-Rule
-Add-Line 'Done. Your updated Windows installation ISO is ready:' -Color Green
-Add-Line "  $Output" -Color Green
-Add-Line '  Open \WISO-Build on the ISO for the record of how it was built.' -Color DarkGray
+$Summary = [ordered]@{
+    'ISO'          = $Output
+    'Size'         = '6.84 GB'
+    'Build'        = '10.0.26200.7019'
+    'Editions'     = 'Windows 11 Pro'
+    'Run time'     = Format-Duration ($Finished - $script:RunStart)
+    'Build record' = '\WISO-Build on the ISO'
+}
+foreach ($BoxLine in (Format-SummaryBox -Title 'Done. Your updated Windows installation ISO is ready' -Rows $Summary -Width $Columns -Style $script:Style)) {
+    $script:Lines.Add([pscustomobject]@{ Text = $BoxLine; Color = 'Green' })
+}
 Add-Rule
 Add-Line 'Windows ISO Updater script finished.' -Color Green
 Add-Raw
@@ -187,7 +204,10 @@ function ConvertTo-XmlText {
     param([string]$Text)
     # Browsers collapse runs of spaces in SVG text whatever xml:space says, which would break the indents
     # and column padding. A no-break space is never collapsed and is just as wide in a monospace font.
-    return [System.Security.SecurityElement]::Escape($Text).Replace(' ', '&#160;')
+    # Anything outside ASCII, such as the check marks and box drawing, is written as a character reference, so
+    # the file stays ASCII whatever reads it.
+    $Escaped = [System.Security.SecurityElement]::Escape($Text).Replace(' ', '&#160;')
+    return [regex]::Replace($Escaped, '[^\x00-\x7F]', { param($Match) '&#x{0:X4};' -f [int][char]$Match.Value })
 }
 
 $Sb = [System.Text.StringBuilder]::new()

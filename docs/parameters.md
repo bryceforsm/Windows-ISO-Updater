@@ -65,6 +65,7 @@ The script supports the following optional parameters:
 | `-OscdimgSha256` | Expected SHA-256 of the downloaded `oscdimg.exe`. Pass an empty string to skip the hash check when overriding `-OscdimgUrl`. |
 | `-LogPath` | Directory to write log files to. Defaults to a `Logs` folder inside the working folder. |
 | `-SkipInteractive` | Skips the interactive confirmation prompt (still shows output). |
+| `-SkipVersionCheck` | Skip checking GitHub for a newer release of the script. **By default** each run asks GitHub for the latest release while it writes the log header, and gives up after 3 seconds, so the check costs a run little or nothing. The console says whether this is the latest release, or which newer one is available. When GitHub cannot be reached, the console says nothing and only the log records it. |
 
 ## Scheduled runs, build stamps and housekeeping
 

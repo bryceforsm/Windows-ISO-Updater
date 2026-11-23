@@ -6,7 +6,7 @@ $script:ScriptPath = $PSCommandPath
 
 # Kept in step with the header comment by tools\Update-Version.ps1, and shown in the log and recorded in
 # the build stamp so a finished ISO can be traced back to the exact script that built it.
-$ScriptVersion = '2026.11.22.1'
+$ScriptVersion = '2026.11.22.5'
 
 # A scheduled run has nobody to answer a prompt.
 if ($Scheduled) {
@@ -177,7 +177,9 @@ if ($PromptTaskPassword -and -not $TaskPassword) {
 }
 
 # Add a Window Title
-$Host.UI.RawUI.WindowTitle = "Windows ISO Updater - Running as Administrator - $env:COMPUTERNAME"
+# Kept so the title can name the current step and its progress in front of it (see Set-ConsoleTitle).
+$script:BaseWindowTitle = "Windows ISO Updater - Running as Administrator - $env:COMPUTERNAME"
+try { $Host.UI.RawUI.WindowTitle = $script:BaseWindowTitle } catch { }
 
 #endregion
 
@@ -300,11 +302,9 @@ Get-ChildItem -Path $LogDir -Filter 'Windows-ISO-Updater_*_DISM' -Directory -Err
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
 $ProgressPreference = 'SilentlyContinue'
-$LineBreakCharacter = '-'
-$LineBreak = $null
-1..$($Host.UI.RawUI.BufferSize.Width) | ForEach-Object {
-    $LineBreak += $LineBreakCharacter
-}
+# What separates the sections of the console output: an empty line. Each step opens with its own ruled heading,
+# so a rule here would only double it.
+$LineBreak = ''
 
 # Wall-clock start of the run plus the per-step durations collected by Invoke-Task, reported at the end.
 $script:ScriptStartTime = Get-Date

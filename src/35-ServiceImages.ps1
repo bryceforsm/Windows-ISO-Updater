@@ -30,7 +30,7 @@ elseif ($KeepEditions -and $KeepEditions.Count -gt 0) {
         Write-HostTimestamp "These -KeepEditions values did not match any edition: $($KeepUnmatched -join ', ')" -ForegroundColor Red
         Write-HostTimestamp 'Available editions:' -ForegroundColor Yellow
         $InstallImages | ForEach-Object { Write-HostLog "    [$($_.ImageIndex)] $($_.ImageName)" }
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
     else {
@@ -52,7 +52,7 @@ elseif ($InstallImages.Count -gt 1) {
     $DroppedNames = $InstallImages | Where-Object { $KeepIndexes -notcontains [int]$_.ImageIndex } | ForEach-Object { $_.ImageName }
     $EditionRule = if ($script:EffectiveServer) { 'the most upgradeable edition' } elseif ($KeepIndexes.Count -gt 1) { 'the Enterprise, Pro and Home editions the media carries' } else { 'one edition' }
     Write-HostTimestamp "Keeping only $EditionRule to speed up the build: $($KeptNames -join ', '). Use -KeepAllEditions to keep them all, or -KeepEditions to choose." -ForegroundColor Cyan
-    if ($script:EffectiveServer) { Write-HostTimestamp '  Standard can be upgraded to Datacenter in place with DISM /Set-Edition, but Datacenter can never be downgraded, so Standard is the safer edition to ship.' -ForegroundColor DarkGray }
+    if ($script:EffectiveServer) { Write-HostTimestamp '  Standard can be upgraded to Datacenter in place with DISM /Set-Edition, but Datacenter can never be downgraded, so Standard is the safer edition to ship.' }
     if ($DroppedNames) { Write-HostTimestamp "Removing from the ISO: $($DroppedNames -join ', ')" -ForegroundColor Yellow }
     Write-Host $LineBreak
 }
@@ -69,7 +69,7 @@ else {
     if ($EdIndexes.Count -eq 0) {
         Write-HostTimestamp "Edition '$Edition' was not found in the image. Available editions:" -ForegroundColor Red
         $InstallImages | ForEach-Object { Write-HostLog "    [$($_.ImageIndex)] $($_.ImageName)" }
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 1
     }
     # Only service editions we are keeping in the final ISO.
@@ -115,12 +115,12 @@ if ($UpdateGroups.Count -gt 0 -or $script:DriverInfFiles.Count -gt 0) {
                 $WinReBefore = Get-WinReVersion -WinReWim $WinReWim
                 if ($WinReBefore) {
                     Add-WinReVersionSample -Label $WinReVersionLabel -Version $WinReBefore.Version
-                    Write-HostTimestamp "    The recovery image is at $($WinReBefore.Version)." -ForegroundColor DarkGray
+                    Write-HostTimestamp "    The recovery image is at $($WinReBefore.Version)."
                 }
 
                 if (-not $SkipWinRE -and $SafeOsGroup) {
                     if (-not (Test-Path -LiteralPath $WinReWim)) {
-                        Write-HostTimestamp '    This edition carries no winre.wim, so there is no recovery image to service.' -ForegroundColor DarkGray
+                        Write-HostTimestamp '    This edition carries no winre.wim, so there is no recovery image to service.'
                     }
                     elseif (-not $ReapplyUpdates -and (Test-WinReAlreadyCurrent -WinReWim $WinReWim -KbNumber $script:SafeOsKb -Version $WinReBefore)) {
                         Add-ServicingResult -Image $WinReLabel -Package "KB$($script:SafeOsKb)" -Result 'Skipped' -Detail 'Already at the build this Safe OS Dynamic Update delivers'

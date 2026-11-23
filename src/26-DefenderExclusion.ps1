@@ -62,7 +62,7 @@ function Add-WorkPathDefenderExclusion {
             return
         }
         'Off' {
-            Write-HostTimestamp '-ExcludeWorkPathFromDefender: Defender real-time protection is already off, so there is nothing to exclude.' -ForegroundColor DarkGray
+            Write-HostTimestamp '-ExcludeWorkPathFromDefender: Defender real-time protection is already off, so there is nothing to exclude.'
             return
         }
     }
@@ -74,7 +74,7 @@ function Add-WorkPathDefenderExclusion {
         # Only the folders not already on the list are added, and only those are recorded for removal.
         $ToAdd = @($Folders | Where-Object { -not (Test-PathInList -List $Existing -Path $_) })
         if ($ToAdd.Count -eq 0) {
-            Write-HostTimestamp "The working folders ($Names) are already excluded from Defender scanning, so those exclusions are left as they are." -ForegroundColor DarkGray
+            Write-HostTimestamp "The working folders ($Names) are already excluded from Defender scanning, so those exclusions are left as they are."
             return
         }
         # Written before the exclusions are added, so no moment exists where Defender has them and nothing
@@ -102,7 +102,7 @@ function Add-WorkPathDefenderExclusion {
     $script:DefenderExclusionPaths = $ToAdd
     Start-DefenderExclusionWatcher
     Write-HostTimestamp "Excluded the folders DISM works in from Defender real-time scanning for this run: $Names (in $($WorkRoot.TrimEnd('\')))" -ForegroundColor Yellow
-    Write-HostTimestamp '  The exclusions come off again when the run ends, however it ends. Downloads and the finished ISO are still scanned.' -ForegroundColor DarkGray
+    Write-HostTimestamp '  The exclusions come off again when the run ends, however it ends. Downloads and the finished ISO are still scanned.'
 }
 
 # A hidden process that outlives this one by a moment: it waits for this process to end, then removes the
@@ -130,7 +130,7 @@ if (`$Record -and [int]`$Record.Pid -eq $PID) {
     }
     catch {
         # Not fatal: the normal end of the run removes them, and the next run clears a marker left behind.
-        Write-HostTimestamp "  Could not start the process that removes the exclusions if this run is cut short: $($_.Exception.Message)" -ForegroundColor DarkGray
+        Write-HostTimestamp "  Could not start the process that removes the exclusions if this run is cut short: $($_.Exception.Message)"
     }
 }
 
@@ -140,7 +140,7 @@ function Remove-WorkPathDefenderExclusion {
     try {
         Remove-MpPreference -ExclusionPath $script:DefenderExclusionPaths -ErrorAction Stop
         Remove-Item -LiteralPath (Get-DefenderExclusionMarker) -Force -ErrorAction SilentlyContinue
-        Write-HostTimestamp "Removed the Defender exclusions for the working folders: $(($script:DefenderExclusionPaths | ForEach-Object { Split-Path -Leaf $_ }) -join ', ')" -ForegroundColor DarkGray
+        Write-HostTimestamp "Removed the Defender exclusions for the working folders: $(($script:DefenderExclusionPaths | ForEach-Object { Split-Path -Leaf $_ }) -join ', ')"
         $script:DefenderExclusionPaths = $null
     }
     catch {
@@ -159,7 +159,7 @@ function Clear-StaleDefenderExclusion {
         $Paths = @($Record.Paths | Where-Object { $_ })
         if ($Paths.Count -gt 0 -and (Get-Command -Name Remove-MpPreference -ErrorAction SilentlyContinue)) {
             Remove-MpPreference -ExclusionPath $Paths -ErrorAction Stop
-            Write-HostTimestamp "Removed the Defender exclusions an interrupted run left behind: $($Paths -join ', ')" -ForegroundColor DarkGray
+            Write-HostTimestamp "Removed the Defender exclusions an interrupted run left behind: $($Paths -join ', ')"
             Write-Host $LineBreak
         }
         Remove-Item -LiteralPath $Marker -Force -ErrorAction SilentlyContinue

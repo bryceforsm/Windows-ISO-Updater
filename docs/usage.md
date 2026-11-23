@@ -290,6 +290,14 @@ Every kept edition is serviced by default, so a two-edition build takes roughly 
 
 While DISM works, a progress line shows its percentage and how long the step has taken. Treat the percentage as a rough guide. How DISM counts depends on the update, so a cumulative update can sit at one figure for many minutes and then jump, and a commit says nothing at all for its first few minutes. The time keeps counting every second while DISM is running, and after a minute at one figure the line adds `still working (no change for ...)`, so a quiet stretch is easy to tell from a hang. If the time itself stops counting, check that the console window is not in selection mode: a click inside it starts selecting text, which pauses the script until you press `Esc`.
 
+You can follow a build without the window in front:
+
+- **The window title** names the current step and, while a progress line is shown, its percentage, for example `42% - Servicing install.wim index 3 (Windows 11 Pro) - Windows ISO Updater ...`.
+- **In Windows Terminal**, the tab and the taskbar button also fill up as a progress bar while DISM reports a percentage.
+- **When a run you started yourself ends** after a minute or more, the console bell sounds and the taskbar button flashes until you switch back. Runs with `-Unattended` or `-Scheduled` stay quiet.
+
+Each step starts with a cyan heading, and lines that report a success, a warning or an error start with a symbol: `✓`, `!` or `✗` in Windows Terminal, the VS Code terminal or a UTF-8 console. A classic console window uses only characters its code page has (`√`, `!` and `x` on code pages 437, 850 and 858), and any other code page, redirected output and scheduled runs use plain ASCII (`+`, `!`, `x`), so nothing shows up as `?`. The finished run's summary is drawn as a box the same way. The `.log` never gets any of these, only the message text.
+
 ## Speeding Up a Build
 
 DISM has no setting that makes it faster, but most of a build's time goes on things you can choose. In order of how much they usually save:
@@ -367,12 +375,12 @@ D:\Media-Extras\                 ->  <ISO root>\
 The copy runs **last**, after the images have been serviced and after `-UnattendPath` has placed `autounattend.xml`, so a file in your folder deliberately wins over the media's own copy. Because that is easy to do by accident, **every file is logged as it goes on** and the ones that landed on top of something are marked:
 
 ```text
-[08/16/2026|14:22:07]     \autounattend.xml (1.4 KB) REPLACED
-[08/16/2026|14:22:07]     \sources\install.wim (4692310.5 KB) REPLACED
-[08/16/2026|14:22:07]     \Tools\Diag.ps1 (12.4 KB)
-[08/16/2026|14:22:07]     \Tools\Nested\collect.cmd (0.6 KB)
-[08/16/2026|14:22:07]   Copied 4 file(s) to the root of the media.
-[08/16/2026|14:22:08]   2 of them REPLACED a file the media already had, marked above and listed in the build record.
+[14:22:07]     \autounattend.xml (1.4 KB) REPLACED
+[14:22:07]     \sources\install.wim (4692310.5 KB) REPLACED
+[14:22:07]     \Tools\Diag.ps1 (12.4 KB)
+[14:22:07]     \Tools\Nested\collect.cmd (0.6 KB)
+[14:22:07]   Copied 4 file(s) to the root of the media.
+[14:22:08]   2 of them REPLACED a file the media already had, marked above and listed in the build record.
 ```
 
 The same list, with the SHA-256 and size of each file, goes into the [build record on the ISO](reference.md#the-build-record-on-the-iso), so months later you can still tell what is on the media apart from what the folder happens to hold today. Four cases get a louder warning, because they undo work the run just did:

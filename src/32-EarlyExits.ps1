@@ -29,7 +29,7 @@ if ($ListEditions) {
         if ($ListMount) { Dismount-DiskImage -ImagePath $ResolvedIso -ErrorAction SilentlyContinue | Out-Null }
     }
     Write-Host $LineBreak
-    Stop-Transcript | Out-Null
+    Stop-RunLogging | Out-Null
     exit 0
 }
 
@@ -191,15 +191,19 @@ if ($RecoveryIsoOnly) {
 
     Write-HostTimestamp "Total run time: $(Format-Duration ((Get-Date) - $script:ScriptStartTime))" -ForegroundColor Cyan
     if ($RecoveryExit -eq 0) {
-        Write-HostTimestamp 'Done. Your recovery ISO is ready:' -ForegroundColor Green
-        Write-HostTimestamp "  $script:RecoveryIsoOutput" -ForegroundColor Green
+        $Summary = [ordered]@{ 'ISO' = $script:RecoveryIsoOutput }
+        $FinishedIso = Get-Item -LiteralPath $script:RecoveryIsoOutput -ErrorAction SilentlyContinue
+        if ($FinishedIso) { $Summary['Size'] = '{0:N0} MB' -f ($FinishedIso.Length / 1MB) }
+        $Summary['Run time'] = Format-Duration ((Get-Date) - $script:ScriptStartTime)
+        Write-SummaryBox -Title 'Done. Your recovery ISO is ready' -Rows $Summary
         Write-HostLog 'Boot it, or a USB stick written from it, and it opens straight to the Windows Recovery Environment.'
     }
     Write-Host $LineBreak
+    Complete-ConsoleRun -Failed:($RecoveryExit -ne 0)
     if (-not $Unattended -and -not $SkipInteractive) {
         Read-Host -Prompt 'Press enter to exit'
     }
-    Stop-Transcript | Out-Null
+    Stop-RunLogging | Out-Null
     exit $RecoveryExit
 }
 
@@ -238,8 +242,8 @@ if (-not $NoStamp) {
             # otherwise looks like it only compared local files and never asked Microsoft anything.
             if ($script:ExpectedUpdateSet -and -not $SkipUpdates -and -not $SkipServicing -and -not $UpdatePath) {
                 $Listed = @($script:ExpectedUpdateSet | ForEach-Object { $_ -replace '^(\w+)=(.+)@(.+)$', '$1 $2 (published $3)' })
-                Write-HostTimestamp "  The Microsoft Update Catalog was checked for $(Get-CatalogProductQuery -FeatureUpdate $StampFeature) $StampArch, newest available:" -ForegroundColor DarkGray
-                foreach ($Item in $Listed) { Write-HostTimestamp "    $Item" -ForegroundColor DarkGray }
+                Write-HostTimestamp "  The Microsoft Update Catalog was checked for $(Get-CatalogProductQuery -FeatureUpdate $StampFeature) $StampArch, newest available:"
+                foreach ($Item in $Listed) { Write-HostTimestamp "    $Item" }
             }
         }
 
@@ -252,39 +256,40 @@ if (-not $NoStamp) {
     if ($CheckOnly) {
         if ($script:StampDecision.Rebuild) {
             Write-HostTimestamp 'A rebuild is needed (exit code 10).' -ForegroundColor Yellow
-            Stop-Transcript | Out-Null
+            Stop-RunLogging | Out-Null
             exit 10
         }
         Write-HostTimestamp 'Nothing has changed, so no rebuild is needed (exit code 0).' -ForegroundColor Green
-        Stop-Transcript | Out-Null
+        Stop-RunLogging | Out-Null
         exit 0
     }
 
     if (-not $script:StampDecision.Rebuild) {
         if ($Force) {
             Write-HostTimestamp 'Nothing has changed since the last build, but -Force was specified - building anyway.' -ForegroundColor Yellow
+            # The step above already ended with a rule, so only a line printed after it needs another.
+            Write-Host $LineBreak
         }
         else {
             Write-HostTimestamp 'Nothing has changed since the last build, so this run has nothing to do.' -ForegroundColor Green
             if ($script:PreviousStamp -and $script:PreviousStamp.Output) {
                 Write-HostTimestamp "The ISO from that build is still current: $($script:PreviousStamp.Output.Path)" -ForegroundColor Green
             }
-            Write-HostTimestamp 'Use -Force to build anyway.' -ForegroundColor DarkGray
+            Write-HostTimestamp 'Use -Force to build anyway.'
             if ($AutoClean) {
                 Invoke-Task -Description 'Cleaning up old downloads and ISOs (-AutoClean)...' -ScriptBlock {
                     Invoke-AutoClean -CurrentStamp $script:PreviousStamp -History (Get-BuildStampHistory) -KeepIsoCount $KeepIsoCount -Protected @($ResolvedIso)
                 }
             }
             else { Write-Host $LineBreak }
-            Stop-Transcript | Out-Null
+            Stop-RunLogging | Out-Null
             exit 0
         }
     }
-    Write-Host $LineBreak
 }
 elseif ($CheckOnly) {
     Write-HostTimestamp '-CheckOnly needs the build stamps to compare against, but -NoStamp turned them off. Assuming a rebuild is needed (exit code 10).' -ForegroundColor Yellow
-    Stop-Transcript | Out-Null
+    Stop-RunLogging | Out-Null
     exit 10
 }
 

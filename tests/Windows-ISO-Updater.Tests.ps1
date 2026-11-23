@@ -8,7 +8,10 @@ BeforeAll {
         'Get-DismErrorCode', 'Get-DismErrorMeaning', 'Get-DismLogError', 'Get-DismMessage', 'Save-DismLog', 'Format-ExitCode', 'Test-DismImageUnserviceable', 'Test-DismEsuOfflineRefusal', 'Get-OfflineLcuCap', 'Get-OfflineLcuCutoff', 'Get-OfflineLcuCapNote', 'Write-OfflineLcuCapNote', 'Get-LcuTitleExclude', 'Search-UpdateCatalogUpTo', 'Get-CatalogLatestEntry', 'Get-DynamicUpdateKind', 'Select-DynamicUpdateEntry', 'Get-DynamicUpdateSearch', 'Get-CabFileList', 'Expand-ServicingStack', 'Test-StandaloneServicingStack',
         'Format-ByteProgress', 'Format-DismProgressDetail', 'Format-Duration', 'Format-ProgressLine', 'Format-WrappedText', 'Get-DismPercent', 'Get-FileDownload', 'Get-RobocopyPercent', 'Test-BitsUsable', 'Test-PathInList', 'Get-WinHttpProxy', 'Test-VirtualMachineModel', 'Format-Gigabytes', 'Format-Uptime', 'Get-HotpatchBaselineKb', 'Get-PatchTuesdayStart', 'Get-ScheduledTaskArgumentString', 'Get-ScriptCommandLine', 'Get-TextSha256',
         'Resolve-EditionIndexes', 'Search-UpdateCatalog', 'Select-DefaultEditions', 'Select-HotpatchBaselineEntry', 'Test-FidoUrl', 'Test-IsHotpatchBaseline',
-        'Test-MicrosoftDownloadUrl', 'Test-RebuildNeeded', 'Test-SameWriteTime', 'Test-UpdatePackageFile'
+        'Test-MicrosoftDownloadUrl', 'Test-RebuildNeeded', 'Test-SameWriteTime', 'Test-UpdatePackageFile',
+        'Compare-ScriptVersion', 'Receive-VersionCheck', 'Write-VersionCheckResult',
+        'Get-ConsoleStyleSet', 'Get-ConsoleSymbol', 'Format-StepHeader', 'Format-SummaryBox',
+        'Get-OscdimgSummary', 'Get-OscdimgLogLines', 'Format-OscdimgSummary'
     )
     foreach ($Name in $Names) {
         $Definition = $Ast.Find({
@@ -840,6 +843,11 @@ Describe 'Format-ProgressLine' {
         $Line | Should -Be ('    [' + ('#' * 20) + ('-' * 20) + ']  50%  2m 13s')
     }
 
+    It 'draws the bar with the characters it is given' {
+        $Line = Format-ProgressLine -Percent 25 -Detail 'x' -Width 120 -Fill ([string][char]0x2588) -Empty ([string][char]0x2591)
+        $Line | Should -Be ('[' + ([string][char]0x2588 * 10) + ([string][char]0x2591 * 30) + ']  25%  x')
+    }
+
     It 'never reaches the last column, whatever the width' {
         foreach ($Width in 20, 30, 40, 60, 80, 200) {
             foreach ($Percent in 0, 37, 100) {
@@ -913,9 +921,9 @@ Describe 'Format-WrappedText' {
     }
 
     It 'never writes a line wider than the console, and loses no words' {
-        $Text = '[10/14/2026|09:13:38] Keeping only the Enterprise, Pro and Home editions to speed up the build: C:\WISO-Work\Output\Win11_25H2_Pro_x64_en-US_26200.7019.iso'
+        $Text = '[09:13:38] Keeping only the Enterprise, Pro and Home editions to speed up the build: C:\WISO-Work\Output\Win11_25H2_Pro_x64_en-US_26200.7019.iso'
         foreach ($Width in 30, 47, 80, 100) {
-            $Lines = @(Format-WrappedText -Text $Text -Width $Width -Indent 22)
+            $Lines = @(Format-WrappedText -Text $Text -Width $Width -Indent 11)
             $Lines | ForEach-Object { $_.Length | Should -BeLessOrEqual $Width }
             (($Lines | ForEach-Object { $_.Trim() }) -join '') -replace '\s', '' | Should -Be ($Text -replace '\s', '')
         }
@@ -1173,5 +1181,235 @@ Describe 'Passwords stay out of recorded command lines' {
         $Line | Should -Not -Match 'hunter2'
         $Line | Should -Not -Match 'PromptTaskPassword'
         $Line | Should -Match '-Scheduled'
+    }
+}
+
+Describe 'The version check' {
+    BeforeAll {
+        Add-Type -AssemblyName System.Net.Http
+        function Write-CMTraceLog { param($Message, $Type) }
+        $script:LatestReleaseUrl = 'https://github.com/bryceforsm/Windows-ISO-Updater/releases/latest'
+        function New-FinishedCheck {
+            param([string]$Json)
+            [pscustomobject]@{ Client = $null; Task = [System.Threading.Tasks.Task]::FromResult($Json); Deadline = [datetime]::UtcNow.AddSeconds(3); Error = $null }
+        }
+    }
+
+    It 'reports <Status> for v<Current> against release <Latest>' -TestCases @(
+        @{ Current = '2026.11.22.1'; Latest = '2026.11.22.1'; Status = 'Latest' }
+        @{ Current = '2026.11.07.5'; Latest = '2026.11.22.1'; Status = 'Outdated' }
+        @{ Current = '2026.11.22.1'; Latest = '2026.11.07.5'; Status = 'Newer' }
+        @{ Current = '2026.11.22.1'; Latest = 'v2026.11.22.1'; Status = 'Latest' }
+        @{ Current = '2026.11.22.9'; Latest = '2026.11.22.10'; Status = 'Outdated' }
+        @{ Current = '2026.11.22.1'; Latest = 'not-a-version'; Status = 'Failed' }
+        @{ Current = '2026.11.22.1'; Latest = ''; Status = 'Failed' }
+    ) {
+        (Compare-ScriptVersion -Current $Current -Latest $Latest).Status | Should -Be $Status
+    }
+
+    It 'reads the tag and link from the release GitHub returns' {
+        $Check = New-FinishedCheck -Json '{"tag_name":"2026.12.01.1","html_url":"https://github.com/bryceforsm/Windows-ISO-Updater/releases/tag/2026.12.01.1"}'
+        $Result = Receive-VersionCheck -Check $Check -Current '2026.11.22.1'
+        $Result.Status | Should -Be 'Outdated'
+        $Result.Latest | Should -Be '2026.12.01.1'
+        $Result.Url | Should -Match '/releases/tag/2026\.12\.01\.1$'
+    }
+
+    It 'fails quietly when the request could not be sent' {
+        $Check = [pscustomobject]@{ Client = $null; Task = $null; Deadline = [datetime]::UtcNow; Error = 'No such host is known.' }
+        $Result = Receive-VersionCheck -Check $Check -Current '2026.11.22.1'
+        $Result.Status | Should -Be 'Failed'
+        $Result.Reason | Should -Be 'No such host is known.'
+    }
+
+    It 'fails quietly with the inner error when the request faulted' {
+        $Source = New-Object 'System.Threading.Tasks.TaskCompletionSource[string]'
+        $Source.SetException([System.Net.Http.HttpRequestException]::new('Response status code does not indicate success: 403 (Forbidden).'))
+        $Check = [pscustomobject]@{ Client = $null; Task = $Source.Task; Deadline = [datetime]::UtcNow.AddSeconds(3); Error = $null }
+        $Result = Receive-VersionCheck -Check $Check -Current '2026.11.22.1'
+        $Result.Status | Should -Be 'Failed'
+        $Result.Reason | Should -Match '403'
+    }
+
+    It 'gives up once the deadline has passed instead of waiting' {
+        $Source = New-Object 'System.Threading.Tasks.TaskCompletionSource[string]'
+        $Check = [pscustomobject]@{ Client = $null; Task = $Source.Task; Deadline = [datetime]::UtcNow.AddMilliseconds(-1); Error = $null }
+        $Timer = [System.Diagnostics.Stopwatch]::StartNew()
+        $Result = Receive-VersionCheck -Check $Check -Current '2026.11.22.1'
+        $Timer.Elapsed.TotalSeconds | Should -BeLessThan 1
+        $Result.Status | Should -Be 'Failed'
+        $Result.Reason | Should -Match 'did not answer in time'
+    }
+
+    It 'shows <Status> on the console' -TestCases @(
+        @{ Status = 'Latest';   Color = 'Green';  Text = 'is the latest release' }
+        @{ Status = 'Outdated'; Color = 'Yellow'; Text = 'is available' }
+    ) {
+        Mock Write-HostTimestamp {}
+        Mock Write-CMTraceLog {}
+        Write-VersionCheckResult -Result ([pscustomobject]@{ Status = $Status; Latest = '2026.12.01.1'; Url = $script:LatestReleaseUrl; Reason = $null }) -Current '2026.11.22.1'
+        Should -Invoke Write-HostTimestamp -Times 1 -Exactly -ParameterFilter { $ForegroundColor -eq $Color -and $Message -match $Text }
+        Should -Invoke Write-CMTraceLog -Times 0 -Exactly
+    }
+
+    It 'writes a <Status> check only to the log' -TestCases @(
+        @{ Status = 'Failed' }, @{ Status = 'Skipped' }
+    ) {
+        Mock Write-HostTimestamp {}
+        Mock Write-CMTraceLog {}
+        Write-VersionCheckResult -Result ([pscustomobject]@{ Status = $Status; Latest = $null; Url = $script:LatestReleaseUrl; Reason = 'No such host is known.' }) -Current '2026.11.22.1'
+        Should -Invoke Write-HostTimestamp -Times 0 -Exactly
+        Should -Invoke Write-CMTraceLog -Times 1 -Exactly
+    }
+}
+
+Describe 'The console style' {
+    It 'uses <Kind> characters for <Name>' -TestCases @(
+        @{ Name = 'Windows Terminal';                 Kind = 'Unicode'; Style = @{ CodePage = 437; WindowsTerminal = $true } }
+        @{ Name = 'the VS Code terminal';             Kind = 'Unicode'; Style = @{ CodePage = 437; VsCode = $true } }
+        @{ Name = 'a UTF-8 console';                  Kind = 'Unicode'; Style = @{ CodePage = 65001 } }
+        @{ Name = 'a classic console on 437';         Kind = 'Oem';     Style = @{ CodePage = 437 } }
+        @{ Name = 'a classic console on 850';         Kind = 'Oem';     Style = @{ CodePage = 850 } }
+        @{ Name = 'a classic console on 932';         Kind = 'Ascii';   Style = @{ CodePage = 932 } }
+        @{ Name = 'redirected output';                Kind = 'Ascii';   Style = @{ CodePage = 65001; WindowsTerminal = $true; Redirected = $true } }
+        @{ Name = 'a scheduled run';                  Kind = 'Ascii';   Style = @{ CodePage = 65001; WindowsTerminal = $true; Scheduled = $true } }
+    ) {
+        (Get-ConsoleStyleSet @Style).Kind | Should -Be $Kind
+    }
+
+    It 'never draws outside the code page in a classic console' {
+        $Style = Get-ConsoleStyleSet -CodePage 437
+        $Oem = [System.Text.Encoding]::GetEncoding(437)
+        foreach ($Key in 'Ok', 'Warn', 'Error', 'Rule', 'Side', 'TopLeft', 'TopRight', 'BottomLeft', 'BottomRight', 'BarFill', 'BarEmpty') {
+            $Oem.GetString($Oem.GetBytes($Style[$Key])) | Should -Be $Style[$Key] -Because "$Key has to exist in code page 437"
+        }
+    }
+
+    It 'draws the progress bar in ASCII when the code page has no blocks, even in Windows Terminal' {
+        $Style = Get-ConsoleStyleSet -CodePage 932 -WindowsTerminal $true
+        $Style.Kind | Should -Be 'Unicode'
+        $Style.BarFill | Should -Be '#'
+    }
+
+    It 'uses only ASCII in the ASCII set' {
+        $Style = Get-ConsoleStyleSet -CodePage 932
+        foreach ($Value in $Style.Values | Where-Object { $_ -is [string] }) { $Value | Should -Match '^[\x20-\x7E]+$' }
+    }
+
+    It 'shows taskbar progress only in Windows Terminal with escape sequences on' {
+        (Get-ConsoleStyleSet -CodePage 437 -WindowsTerminal $true -VirtualTerminal $true).TaskbarProgress | Should -BeTrue
+        (Get-ConsoleStyleSet -CodePage 437 -WindowsTerminal $true -VirtualTerminal $false).TaskbarProgress | Should -BeFalse
+        (Get-ConsoleStyleSet -CodePage 437 -VsCode $true -VirtualTerminal $true).TaskbarProgress | Should -BeFalse
+        (Get-ConsoleStyleSet -CodePage 437 -WindowsTerminal $true -VirtualTerminal $true -Scheduled $true).TaskbarProgress | Should -BeFalse
+    }
+
+    It 'marks <Color> lines with the <Key> symbol' -TestCases @(
+        @{ Color = 'Green'; Key = 'Ok' }, @{ Color = 'Yellow'; Key = 'Warn' }, @{ Color = 'DarkYellow'; Key = 'Warn' }, @{ Color = 'Red'; Key = 'Error' }
+    ) {
+        $Style = Get-ConsoleStyleSet -CodePage 65001
+        Get-ConsoleSymbol -Color $Color -Style $Style | Should -Be $Style[$Key]
+    }
+
+    It 'leaves the symbol column blank for other colors' {
+        Get-ConsoleSymbol -Color 'Cyan' -Style (Get-ConsoleStyleSet -CodePage 65001) | Should -Be ' '
+        Get-ConsoleSymbol -Color 'Gray' -Style (Get-ConsoleStyleSet -CodePage 65001) | Should -Be ' '
+    }
+}
+
+Describe 'Format-StepHeader' {
+    It 'fills the rule out to one column short of the edge' {
+        $Header = Format-StepHeader -Text 'Writing the build stamp...' -Width 80 -Rule '-' -PrefixLength 13
+        (13 + $Header.Length) | Should -Be 79
+        $Header | Should -Match '^Writing the build stamp\.\.\. -+$'
+    }
+
+    It 'leaves out the rule when the text nearly fills the line' {
+        Format-StepHeader -Text ('x' * 64) -Width 80 -PrefixLength 13 | Should -Be ('x' * 64)
+    }
+
+    It 'adds a short rule when the width is unknown' {
+        Format-StepHeader -Text 'Step' -Width 0 -Rule '-' | Should -Be 'Step ---'
+    }
+}
+
+Describe 'Format-SummaryBox' {
+    BeforeAll {
+        $script:Rows = [ordered]@{ 'ISO' = 'C:\WISO-Work\Output\Win11.iso'; 'Size' = '6.84 GB'; 'Run time' = '39m 24s' }
+    }
+
+    It 'draws every line of the box the same width' {
+        $Lines = @(Format-SummaryBox -Title 'Done' -Rows $script:Rows -Width 120 -Style (Get-ConsoleStyleSet -CodePage 65001))
+        $Lines.Count | Should -Be 5
+        @($Lines | ForEach-Object { $_.Length } | Select-Object -Unique).Count | Should -Be 1
+        $Lines[1] | Should -Match ('ISO\s+' + [regex]::Escape('C:\WISO-Work\Output\Win11.iso'))
+    }
+
+    It 'lines the values up after the longest label' {
+        $Lines = @(Format-SummaryBox -Title 'Done' -Rows $script:Rows -Width 120 -Style (Get-ConsoleStyleSet -CodePage 932))
+        $Lines[1].IndexOf('C:\') | Should -Be $Lines[3].IndexOf('39m')
+        $Lines[0] | Should -Match '^\+- Done -+\+$'
+    }
+
+    It 'lists the rows without a box when it would not fit' {
+        $Lines = @(Format-SummaryBox -Title 'Done' -Rows $script:Rows -Width 30 -Style (Get-ConsoleStyleSet -CodePage 65001))
+        $Lines[0] | Should -Be 'Done'
+        $Lines[1] | Should -Match ('^  ISO\s+' + [regex]::Escape('C:\'))
+    }
+
+    It 'fits a title longer than every row' {
+        $Lines = @(Format-SummaryBox -Title 'A much longer title than any row' -Rows ([ordered]@{ 'A' = 'b' }) -Width 120 -Style (Get-ConsoleStyleSet -CodePage 65001))
+        @($Lines | ForEach-Object { $_.Length } | Select-Object -Unique).Count | Should -Be 1
+    }
+}
+
+Describe 'Reading oscdimg output' {
+    BeforeAll {
+        # What oscdimg 2.56 printed for a real build: stdout, then stderr, whose percentages end in carriage returns.
+        $script:OscdimgOutput = @(
+            ''
+            'OSCDIMG 2.56 CD-ROM and DVD-ROM Premastering Utility'
+            'Copyright (C) Microsoft, 1993-2012. All rights reserved.'
+            'Licensed only for producing Microsoft authorized content.'
+            ''
+            'Scanning source tree complete (985 files in 98 directories)'
+            'Computing directory information complete'
+            'Image file is 8879472640 bytes (before optimization)'
+            'Writing 985 files in 98 directories to C:\WISO-Work\Output\Win11.iso'
+            'Storage optimization saved 26 files, 17432576 bytes (1% of image)'
+            'After optimization, image file is 8864307200 bytes'
+            'Space saved because of embedding, sparseness or optimization = 17432576'
+            'Done.'
+            "0% complete`r1% complete`r2% complete`r99% complete`r0% complete`r99% complete`r100% complete`r"
+        )
+    }
+
+    It 'reads the file count and what de-duplication saved' {
+        $Summary = Get-OscdimgSummary -Output $script:OscdimgOutput
+        $Summary.Files | Should -Be 985
+        $Summary.Directories | Should -Be 98
+        $Summary.SavedBytes | Should -Be 17432576
+        $Summary.SavedPercent | Should -Be 1
+        $Summary.Error | Should -BeNullOrEmpty
+    }
+
+    It 'picks out the first error' {
+        (Get-OscdimgSummary -Output @('Scanning source tree', 'ERROR: Could not delete existing file "C:\x.iso"', 'ERROR: second')).Error | Should -Be 'Could not delete existing file "C:\x.iso"'
+    }
+
+    It 'keeps the banner, empty lines and percentages out of the log' {
+        $Lines = @(Get-OscdimgLogLines -Output $script:OscdimgOutput)
+        $Lines | Should -Not -Contain ''
+        ($Lines | Where-Object { $_ -match 'complete$' -and $_ -match '^\d' }) | Should -BeNullOrEmpty
+        ($Lines | Where-Object { $_ -match 'OSCDIMG|Copyright|Licensed' }) | Should -BeNullOrEmpty
+        $Lines[0] | Should -Be 'Scanning source tree complete (985 files in 98 directories)'
+        $Lines[-1] | Should -Be 'Done.'
+    }
+
+    It 'sums it up in one line' {
+        Format-OscdimgSummary -Summary (Get-OscdimgSummary -Output $script:OscdimgOutput) | Should -Be '985 files in 98 directories, 17 MB saved by writing identical files once'
+    }
+
+    It 'says nothing about what it cannot read' {
+        Format-OscdimgSummary -Summary (Get-OscdimgSummary -Output @('Done.')) | Should -Be ''
     }
 }

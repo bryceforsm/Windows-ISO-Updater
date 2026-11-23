@@ -155,5 +155,89 @@ function Install-AdkDeploymentTools {
 
     return (Find-Oscdimg)
 }
+
+# What oscdimg's output says about the ISO it wrote: how many files and folders went in, and what writing each
+# identical file only once (-o) saved. Any figure it did not print is $null.
+function Get-OscdimgSummary {
+    param([string[]]$Output)
+    $Summary = [pscustomobject]@{ Files = $null; Directories = $null; SavedBytes = $null; SavedPercent = $null; Error = $null }
+    foreach ($Line in $Output) {
+        if ($Line -match 'Writing (\d+) files in (\d+) directories') {
+            $Summary.Files = [int]$Matches[1]
+            $Summary.Directories = [int]$Matches[2]
+        }
+        elseif ($Line -match 'Storage optimization saved \d+ files, (\d+) bytes \((\d+)% of image\)') {
+            $Summary.SavedBytes = [long]$Matches[1]
+            $Summary.SavedPercent = [int]$Matches[2]
+        }
+        elseif (-not $Summary.Error -and $Line -match '^\s*ERROR:\s*(.+)$') {
+            $Summary.Error = $Matches[1].Trim()
+        }
+    }
+    return $Summary
+}
+
+# oscdimg's output without its banner, empty lines and percentages, for the .log.
+function Get-OscdimgLogLines {
+    param([string[]]$Output)
+    foreach ($Line in $Output) {
+        foreach ($Part in ("$Line" -split '\r')) {
+            $Text = $Part.Trim()
+            if (-not $Text) { continue }
+            if ($Text -match '^\d{1,3}% complete$') { continue }
+            if ($Text -match '^(OSCDIMG \d|Copyright \(C\) Microsoft|Licensed only for producing)') { continue }
+            $Text
+        }
+    }
+}
+
+# Runs oscdimg with a progress line instead of its own output, which otherwise lands on the console unformatted
+# and never reaches the .log. The progress line shows the stage, then the percentage and how much of the ISO is
+# written. Afterwards the console gets one line on what was written, and the .log gets the command and
+# everything oscdimg said. Throws, with oscdimg's own error when it gave one, if the ISO was not written.
+function Invoke-Oscdimg {
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [Parameter(Mandatory)][string[]]$ArgumentList,
+        [Parameter(Mandatory)][string]$Destination,
+        [int]$Indent = 4
+    )
+    # Quoted the way the call operator quotes, so a path with spaces still reaches oscdimg as one argument.
+    $Arguments = (@($ArgumentList | ForEach-Object { if ("$_" -match '\s' -and "$_" -notmatch '^".*"$') { "`"$_`"" } else { "$_" } })) -join ' '
+    Write-CMTraceLog -Message "Running: `"$FilePath`" $Arguments"
+    $Result = Invoke-WatchedProcess -FilePath $FilePath -Arguments $Arguments -WatchFile $Destination -Indent $Indent -Waiting 'Scanning the media' -Writing 'Writing the ISO' -GetPercent {
+        param($Line)
+        if ($Line -match '^\s*(\d{1,3})% complete') { [math]::Min(100, [int]$Matches[1]) }
+    } -GetStage {
+        param($Line)
+        if ($Line -match '^Scanning source tree') { 'Scanning the media' }
+        elseif ($Line -match '^Writing \d+ files') { 'Writing the ISO' }
+    }
+    $Lines = @(Get-OscdimgLogLines -Output $Result.Output)
+    foreach ($Line in $Lines) { Write-CMTraceLog -Message "  oscdimg: $Line" }
+    $Summary = Get-OscdimgSummary -Output $Lines
+
+    if ($Result.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $Destination -PathType Leaf)) {
+        # What it said is the only clue to why, so it goes to the console too.
+        foreach ($Line in ($Lines | Select-Object -Last 8)) { Write-HostTimestamp "  oscdimg: $Line" -ForegroundColor Yellow }
+        $Why = if ($Summary.Error) { ": $($Summary.Error)" } else { '' }
+        if ($Result.ExitCode -ne 0) { throw "oscdimg returned exit code $($Result.ExitCode)$Why" }
+        throw "oscdimg reported success but the ISO was not written$Why"
+    }
+    return $Summary
+}
+
+# The line a finished oscdimg run gets on the console, such as "985 files in 98 directories, 17 MB saved by
+# writing identical files once".
+function Format-OscdimgSummary {
+    param($Summary)
+    $Parts = @()
+    if ($null -ne $Summary.Files) { $Parts += "$($Summary.Files) files in $($Summary.Directories) directories" }
+    if ($Summary.SavedBytes -gt 0) {
+        $Saved = if ($Summary.SavedBytes -ge 1GB) { '{0:N2} GB' -f ($Summary.SavedBytes / 1GB) } elseif ($Summary.SavedBytes -ge 1MB) { '{0:N0} MB' -f ($Summary.SavedBytes / 1MB) } else { '{0:N0} KB' -f ($Summary.SavedBytes / 1KB) }
+        $Parts += "$Saved saved by writing identical files once"
+    }
+    return ($Parts -join ', ')
+}
 #endregion
 
