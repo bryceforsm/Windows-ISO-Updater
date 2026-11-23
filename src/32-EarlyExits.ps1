@@ -119,8 +119,8 @@ if ($RecoveryIsoOnly) {
                 $Cutoff = Get-OfflineLcuCutoff -Build $ImageBuild
                 if ($Cutoff) {
                     $Cap.NotAfter = $Cutoff
-                    Write-OfflineLcuCapNote -Build $ImageBuild
                 }
+                Write-OfflineLcuCapNote -Build $ImageBuild
                 $Lcu = Get-CatalogLatestEntry -Query "Cumulative Update for $Product for $CatalogArch-based Systems" -TitleInclude '(?i)cumulative update (preview )?for (windows|microsoft server operating system)' -TitleExclude (Get-LcuTitleExclude) -AllowPreview:$IncludePreview @Cap
                 $SafeOsArgs = Get-DynamicUpdateSearch -Product $Product -CatalogArch $CatalogArch
                 $SafeOsArgs.DownloadDir = $DlDir

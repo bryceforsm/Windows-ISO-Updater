@@ -79,6 +79,10 @@ if (-not $Unattended -and -not $SkipInteractive -and -not $ListEditions -and -no
             if ($IncludePreview) {
                 Write-HostLog "  - Allow preview updates to be selected (-IncludePreview): the media can end up on a build Windows Update will not offer until next month" -ForegroundColor Yellow
             }
+            if ($IgnoreOfflineUpdateCap) {
+                Write-HostLog "  - Ignore the offline update cap (-IgnoreOfflineUpdateCap): media past the end of support gets an Extended Security Update" -ForegroundColor Yellow
+                Write-HostLog "      WARNING: this will likely break the build. ESU updates refuse an offline image, and there is no workaround for that here" -ForegroundColor Yellow
+            }
             if (-not $SkipSetupDU) { Write-HostLog "  - Download the latest Setup Dynamic Update and apply it to the media's sources folder" }
         }
         Write-HostLog "  - Integrate the update(s) into install.wim ($Edition), boot.wim$(if (-not $SkipWinRE) { ', and winre.wim' })"

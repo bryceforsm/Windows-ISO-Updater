@@ -4,6 +4,10 @@ What changed in each release. Versions are dates, `yyyy.MM.dd.<revision>`. Relea
 
 ## [Unreleased]
 
+### Added
+
+- `-IgnoreOfflineUpdateCap` turns off the offline update cap, so Windows 10, Windows 10 LTSB 2016 and Windows Server media past its end of support gets the catalog's newest cumulative update instead of the last one before Extended Security Updates. **This will likely break the build.** ESU updates refuse to install on an offline image, and the script has no workaround for that, so DISM fails on the update and that edition ships without it. The run plan and the log warn in yellow, and the `\WISO-Build` record and the build stamp mark the cap `Ignored`. It is a build parameter, so turning it on or off forces a rebuild. See [Windows 10 Media Stops at the October 2025 Update](docs/usage.md#windows-10-media-stops-at-the-october-2025-update).
+
 ### Changed
 
 - `Run-Windows-ISO-Updater.bat` now runs the script in PowerShell 7 when it is installed, and in Windows PowerShell 5.1 when it is not, ahead of Windows PowerShell's deprecation. The `pwsh.exe` it finds has to start and report version 7 or newer, so a broken install or a leftover PowerShell 6 falls back to Windows PowerShell too. The first line of the run says which one it chose. To stay on Windows PowerShell, run `powershell.exe -File .\Windows-ISO-Updater.ps1`. See [How to Run This Script](docs/usage.md).

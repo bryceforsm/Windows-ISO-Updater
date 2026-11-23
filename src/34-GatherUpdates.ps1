@@ -76,8 +76,8 @@ else {
         $Cap = @{}
         if ($script:LcuCutoff) {
             $Cap.NotAfter = $script:LcuCutoff
-            Write-OfflineLcuCapNote -Build $ImageBuild
         }
+        Write-OfflineLcuCapNote -Build $ImageBuild
         $script:Lcu = Get-LatestCatalogPackage -Query $Query -DownloadDir $DlDir -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview -CurrentBuild $ImageBuild -CurrentUbr $ImageUbr -VerifyWimPath $InstallWimExtracted -VerifyPatchLevel:$VerifyPatchLevel -Reapply:$ReapplyUpdates -AlreadyCurrent ([ref]$script:LcuUpToDate) -BaselineOnly:$BaselineOnly -SelectedDate ([ref]$script:LcuReleaseDate) @Cap
         if (-not $script:Lcu -and -not $script:LcuUpToDate -and -not $script:EffectiveServer) {
             # Retry with a looser query (some releases omit the "Version xxHx" token in the title). Server
@@ -97,7 +97,7 @@ else {
     elseif ($script:LcuUpToDate) {
         # Nothing will change the OS build now, so reuse the build already confirmed by the check.
         if (-not $script:FinalBuildString) { $script:FinalBuildString = $script:LcuUpToDate }
-        $Patched = if ($script:OfflineLcuCapRecord) { 'as far as an offline update can take it' } else { 'fully patched' }
+        $Patched = if ($script:OfflineLcuCapRecord -and $script:OfflineLcuCapRecord.Status -ne 'Ignored') { 'as far as an offline update can take it' } else { 'fully patched' }
         Write-HostTimestamp "The image is already $Patched ($script:LcuUpToDate), so no cumulative update is needed." -ForegroundColor Green
         Add-ServicingResult -Image 'install.wim, boot.wim, winre.wim and the media sources folder' -Package 'Cumulative, .NET, Setup and Safe OS Dynamic Updates' -Result 'Skipped' -Detail "The media is already at $script:LcuUpToDate, so it is left as it shipped"
         Write-HostTimestamp '  The .NET update, both Dynamic Updates and boot.wim are left exactly as the media shipped them, so its Setup files stay matched to its images. Use -ReapplyUpdates to integrate everything anyway.' -ForegroundColor DarkGray

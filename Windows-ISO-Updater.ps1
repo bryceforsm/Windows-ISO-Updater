@@ -1,6 +1,6 @@
 # GENERATED FILE. Edit the files in src\ and run tools\Build-Script.ps1, because changes made here are overwritten.
 # Windows ISO Updater
-# Version: 2026.11.15.3   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
+# Version: 2026.11.22.1   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
 #
 #region Script overview
 # This script builds a fully up-to-date ("slipstreamed") Windows 11, Windows 10 or Windows Server
@@ -127,6 +127,9 @@ param(
 
     [Parameter(HelpMessage = 'Allow the optional preview updates Microsoft publishes late in the month (titled "... Preview of Monthly Quality Rollup" or "Cumulative Update Preview") to be selected. They are excluded by default because they are next month''s fixes released early for testing, so they carry a higher build than anything Windows Update will offer the finished media. Useful for validating a coming update, not for production media')]
     [switch]$IncludePreview,
+
+    [Parameter(HelpMessage = 'Turn off the offline update cap, so media whose release has entered Extended Security Updates (Windows 10 after October 2025, Windows 10 LTSB 2016 after October 2026, and each Windows Server release once its support ends) gets the catalog''s newest cumulative update instead of the last one before ESU. WARNING: this will likely break the build. ESU updates refuse to install on an offline image, so DISM fails on the update and that edition ships without it. The script has no workaround for ESU updates offline')]
+    [switch]$IgnoreOfflineUpdateCap,
 
     [Parameter(HelpMessage = 'Mount the image read-only and read its real patch level from the registry before deciding whether the cumulative update is needed. By default the build recorded in the WIM header is trusted, which is instant but is wrong on some media (UUP-built and Media Creation Tool images can report an old revision while being fully patched, or the reverse). Costs a few minutes')]
     [switch]$VerifyPatchLevel,
@@ -314,7 +317,7 @@ $script:ScriptPath = $PSCommandPath
 
 # Kept in step with the header comment by tools\Update-Version.ps1, and shown in the log and recorded in
 # the build stamp so a finished ISO can be traced back to the exact script that built it.
-$ScriptVersion = '2026.11.15.3'
+$ScriptVersion = '2026.11.22.1'
 
 # A scheduled run has nobody to answer a prompt.
 if ($Scheduled) {
@@ -2005,11 +2008,15 @@ function Get-OfflineLcuCap {
     return $null
 }
 
+# -IgnoreOfflineUpdateCap turns the cap off, so the catalog's newest update is chosen as if there were none. The
+# cap still exists for the note below, which warns that the run is past it.
 function Get-OfflineLcuCutoff {
     param(
         [int]$Build,
-        [bool]$Server = [bool]$script:EffectiveServer
+        [bool]$Server = [bool]$script:EffectiveServer,
+        [bool]$Ignore = [bool]$script:IgnoreOfflineUpdateCap
     )
+    if ($Ignore) { return $null }
     $Cap = Get-OfflineLcuCap -Build $Build -Server $Server
     if ($Cap) { return $Cap.Cutoff }
     return $null
@@ -2018,29 +2025,43 @@ function Get-OfflineLcuCutoff {
 # What a run says and records about the cap, or $null while it changes nothing. Before the cutoff has passed no
 # update newer than it exists, so a cap is only worth mentioning once it can actually hold one back. A cap that
 # has not been confirmed says so, so nobody reading the log or the ISO's record mistakes a prediction for a fact.
+# An ignored cap is a warning instead, recorded as Ignored, so an ISO that fails or ships unupdated says why.
 function Get-OfflineLcuCapNote {
     param(
         [int]$Build,
         [datetime]$Now = (Get-Date),
-        [bool]$Server = [bool]$script:EffectiveServer
+        [bool]$Server = [bool]$script:EffectiveServer,
+        [bool]$Ignore = [bool]$script:IgnoreOfflineUpdateCap
     )
     $Cap = Get-OfflineLcuCap -Build $Build -Server $Server
     if (-not $Cap -or $Now -le $Cap.Cutoff) { return $null }
     $Month = $Cap.Cutoff.ToString('MMMM yyyy', [System.Globalization.CultureInfo]::InvariantCulture)
     $Message =
-        if ($Cap.Confirmed) {
+        if ($Ignore) {
+            "WARNING: -IgnoreOfflineUpdateCap is set, so build $Build ($($Cap.Release)) is not capped at the $Month cumulative update and a newer one may be chosen. Updates after $Month are Extended Security Updates, which $(if ($Cap.Confirmed) { 'refuse' } else { 'are expected to refuse' }) an offline image. This will likely break the build: DISM fails on that update and the edition ships without it. The script has no workaround for ESU updates offline."
+        }
+        elseif ($Cap.Confirmed) {
             "Build $Build ($($Cap.Release)) is capped at the $Month cumulative update. Later ones carry an Extended Security Updates step that refuses to run on an offline image, so Windows installs them after setup."
         }
         else {
             "Build $Build ($($Cap.Release)) is capped at the $Month cumulative update. Later ones are Extended Security Updates, which are expected to refuse an offline image, but this has not been confirmed yet. Windows installs them after setup on a machine enrolled in ESU. To try a newer one offline, supply it with -UpdatePath."
         }
+    $Status =
+        if ($Ignore) { 'Ignored' }
+        elseif ($Cap.Confirmed) { 'Confirmed' }
+        else { 'Expected' }
+    $Reason =
+        if ($Ignore) { 'Cap turned off with -IgnoreOfflineUpdateCap, so a later Extended Security Update may have been chosen' }
+        elseif ($Cap.Confirmed) { 'Later cumulative updates refuse an offline image (Extended Security Updates)' }
+        else { 'Later cumulative updates are expected to refuse an offline image (Extended Security Updates), not yet confirmed' }
     return [pscustomobject]@{
         Message = $Message
+        Ignored = $Ignore
         Record  = [ordered]@{
             Release   = $Cap.Release
             NotAfter  = $Cap.Cutoff.ToString('yyyy-MM', [System.Globalization.CultureInfo]::InvariantCulture)
-            Status    = if ($Cap.Confirmed) { 'Confirmed' } else { 'Expected' }
-            Reason    = if ($Cap.Confirmed) { 'Later cumulative updates refuse an offline image (Extended Security Updates)' } else { 'Later cumulative updates are expected to refuse an offline image (Extended Security Updates), not yet confirmed' }
+            Status    = $Status
+            Reason    = $Reason
         }
     }
 }
@@ -2058,7 +2079,8 @@ function Write-OfflineLcuCapNote {
     $script:OfflineLcuCapRecord = $Note.Record
     if ($script:OfflineLcuCapNoted -eq $Build) { return }
     $script:OfflineLcuCapNoted = $Build
-    Write-HostTimestamp "  $($Note.Message)" -ForegroundColor DarkGray
+    if ($Note.Ignored) { Write-HostTimestamp "  $($Note.Message)" -ForegroundColor Yellow }
+    else { Write-HostTimestamp "  $($Note.Message)" -ForegroundColor DarkGray }
 }
 
 # A catalog search returns only its 25 newest matches, so one bounded by an older date can come back with
@@ -2469,7 +2491,7 @@ function Get-UpdateFileRecords {
 # deliberately left out: moving the working folder does not make last month's ISO wrong.
 $script:BuildAffectingParameters = @(
     'WindowsVersion', 'Release', 'Language', 'Edition', 'KeepEditions', 'KeepAllEditions',
-    'UpdatePath', 'SkipDotNet', 'SkipSetupDU', 'SkipWinRE', 'BaselineOnly', 'IncludePreview', 'ReapplyUpdates', 'SkipUpdates', 'SkipServicing', 'CompressEsd', 'FastCompression', 'VolumeLabel',
+    'UpdatePath', 'SkipDotNet', 'SkipSetupDU', 'SkipWinRE', 'BaselineOnly', 'IncludePreview', 'IgnoreOfflineUpdateCap', 'ReapplyUpdates', 'SkipUpdates', 'SkipServicing', 'CompressEsd', 'FastCompression', 'VolumeLabel',
     'SkipTattoo', 'StripImageResidue', 'DriverPath', 'AllowUnsignedDrivers', 'ExtraFilesPath'
 )
 
@@ -2776,8 +2798,9 @@ function Get-ExpectedUpdateSet {
     $Cutoff = Get-OfflineLcuCutoff -Build $Build
     if ($Cutoff) {
         $Cap.NotAfter = $Cutoff
-        Write-OfflineLcuCapNote -Build $Build
     }
+    # Outside the if, so a cap turned off with -IgnoreOfflineUpdateCap still warns and is recorded.
+    Write-OfflineLcuCapNote -Build $Build
     $Lcu = Get-CatalogLatestEntry -Query "Cumulative Update for $Product for $CatalogArch-based Systems" -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview -BaselineOnly:$BaselineOnly @Cap
     if (-not $Lcu -and -not $script:EffectiveServer) {
         $Lcu = Get-CatalogLatestEntry -Query "Cumulative Update for $(Get-CatalogProductQuery) for $CatalogArch-based Systems" -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview -BaselineOnly:$BaselineOnly @Cap
@@ -6184,6 +6207,10 @@ if (-not $Unattended -and -not $SkipInteractive -and -not $ListEditions -and -no
             if ($IncludePreview) {
                 Write-HostLog "  - Allow preview updates to be selected (-IncludePreview): the media can end up on a build Windows Update will not offer until next month" -ForegroundColor Yellow
             }
+            if ($IgnoreOfflineUpdateCap) {
+                Write-HostLog "  - Ignore the offline update cap (-IgnoreOfflineUpdateCap): media past the end of support gets an Extended Security Update" -ForegroundColor Yellow
+                Write-HostLog "      WARNING: this will likely break the build. ESU updates refuse an offline image, and there is no workaround for that here" -ForegroundColor Yellow
+            }
             if (-not $SkipSetupDU) { Write-HostLog "  - Download the latest Setup Dynamic Update and apply it to the media's sources folder" }
         }
         Write-HostLog "  - Integrate the update(s) into install.wim ($Edition), boot.wim$(if (-not $SkipWinRE) { ', and winre.wim' })"
@@ -6547,8 +6574,8 @@ if ($RecoveryIsoOnly) {
                 $Cutoff = Get-OfflineLcuCutoff -Build $ImageBuild
                 if ($Cutoff) {
                     $Cap.NotAfter = $Cutoff
-                    Write-OfflineLcuCapNote -Build $ImageBuild
                 }
+                Write-OfflineLcuCapNote -Build $ImageBuild
                 $Lcu = Get-CatalogLatestEntry -Query "Cumulative Update for $Product for $CatalogArch-based Systems" -TitleInclude '(?i)cumulative update (preview )?for (windows|microsoft server operating system)' -TitleExclude (Get-LcuTitleExclude) -AllowPreview:$IncludePreview @Cap
                 $SafeOsArgs = Get-DynamicUpdateSearch -Product $Product -CatalogArch $CatalogArch
                 $SafeOsArgs.DownloadDir = $DlDir
@@ -7002,8 +7029,8 @@ else {
         $Cap = @{}
         if ($script:LcuCutoff) {
             $Cap.NotAfter = $script:LcuCutoff
-            Write-OfflineLcuCapNote -Build $ImageBuild
         }
+        Write-OfflineLcuCapNote -Build $ImageBuild
         $script:Lcu = Get-LatestCatalogPackage -Query $Query -DownloadDir $DlDir -TitleInclude $Include -TitleExclude $Exclude -AllowPreview:$IncludePreview -CurrentBuild $ImageBuild -CurrentUbr $ImageUbr -VerifyWimPath $InstallWimExtracted -VerifyPatchLevel:$VerifyPatchLevel -Reapply:$ReapplyUpdates -AlreadyCurrent ([ref]$script:LcuUpToDate) -BaselineOnly:$BaselineOnly -SelectedDate ([ref]$script:LcuReleaseDate) @Cap
         if (-not $script:Lcu -and -not $script:LcuUpToDate -and -not $script:EffectiveServer) {
             # Retry with a looser query (some releases omit the "Version xxHx" token in the title). Server
@@ -7023,7 +7050,7 @@ else {
     elseif ($script:LcuUpToDate) {
         # Nothing will change the OS build now, so reuse the build already confirmed by the check.
         if (-not $script:FinalBuildString) { $script:FinalBuildString = $script:LcuUpToDate }
-        $Patched = if ($script:OfflineLcuCapRecord) { 'as far as an offline update can take it' } else { 'fully patched' }
+        $Patched = if ($script:OfflineLcuCapRecord -and $script:OfflineLcuCapRecord.Status -ne 'Ignored') { 'as far as an offline update can take it' } else { 'fully patched' }
         Write-HostTimestamp "The image is already $Patched ($script:LcuUpToDate), so no cumulative update is needed." -ForegroundColor Green
         Add-ServicingResult -Image 'install.wim, boot.wim, winre.wim and the media sources folder' -Package 'Cumulative, .NET, Setup and Safe OS Dynamic Updates' -Result 'Skipped' -Detail "The media is already at $script:LcuUpToDate, so it is left as it shipped"
         Write-HostTimestamp '  The .NET update, both Dynamic Updates and boot.wim are left exactly as the media shipped them, so its Setup files stay matched to its images. Use -ReapplyUpdates to integrate everything anyway.' -ForegroundColor DarkGray

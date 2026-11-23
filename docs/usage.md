@@ -121,6 +121,14 @@ management tool, or on their own with the
 A newer update supplied with `-UpdatePath` fails the same way. That edition then ships as the source media
 had it, and the run's tip names the ESU step as the cause. [Why the cap exists](design-notes.md#why-windows-10-stops-at-the-october-2025-update).
 
+> [!WARNING]
+> `-IgnoreOfflineUpdateCap` turns this cap off, along with the LTSB 2016 and Windows Server caps below,
+> so the catalog's newest cumulative update is chosen as if there were no cap. **This will likely break
+> the build.** The script has no workaround for installing an ESU update offline: DISM fails on it the
+> same way, and that edition ships without the update. The log warns in yellow, and the ISO's
+> [build record](reference.md#the-build-record-on-the-iso) marks the cap `Ignored`. It exists only for
+> testing whether a newer update installs offline. For one specific package, `-UpdatePath` does the same.
+
 ### Windows 10 LTSB 2016 Stops at the October 2026 Update
 
 Windows 10 Enterprise LTSB 2016 and IoT Enterprise LTSB 2016 (version 1607) left support on 13 October

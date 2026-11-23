@@ -264,6 +264,39 @@ Describe 'The offline cumulative update cap' {
         $Note.Record.NotAfter | Should -Be '2027-01'
     }
 
+    It 'applies no cutoff when -IgnoreOfflineUpdateCap turns the cap off' {
+        Get-OfflineLcuCutoff -Build 19045 -Ignore $true | Should -BeNullOrEmpty
+        Get-OfflineLcuCutoff -Build 14393 -Server $true -Ignore $true | Should -BeNullOrEmpty
+    }
+
+    It 'warns that an ignored cap will likely break the build, and records it as Ignored' {
+        $Note = Get-OfflineLcuCapNote -Build 19045 -Now ([datetime]'2026-11-15') -Ignore $true
+        $Note.Ignored | Should -BeTrue
+        $Note.Message | Should -Match '^WARNING: -IgnoreOfflineUpdateCap'
+        $Note.Message | Should -Match 'likely break the build'
+        $Note.Message | Should -Match 'no workaround for ESU updates'
+        $Note.Record.Status | Should -Be 'Ignored'
+        $Note.Record.NotAfter | Should -Be '2025-10'
+    }
+
+    It 'says nothing about an ignored cap before its cutoff has passed' {
+        Get-OfflineLcuCapNote -Build 20348 -Server $true -Now ([datetime]'2026-11-15') -Ignore $true | Should -BeNullOrEmpty
+    }
+
+    It 'logs an ignored cap as a yellow warning, still once per run' {
+        Mock Write-HostTimestamp {}
+        $script:OfflineLcuCapRecord = $null
+        $script:OfflineLcuCapNoted = $null
+        $script:IgnoreOfflineUpdateCap = $true
+        try {
+            Write-OfflineLcuCapNote -Build 19045
+            Write-OfflineLcuCapNote -Build 19045
+        }
+        finally { $script:IgnoreOfflineUpdateCap = $false }
+        Should -Invoke Write-HostTimestamp -Times 1 -Exactly -ParameterFilter { $ForegroundColor -eq 'Yellow' }
+        $script:OfflineLcuCapRecord.Status | Should -Be 'Ignored'
+    }
+
     It 'logs the cap once per run however many steps look it up, and keeps the record' {
         Mock Write-HostTimestamp {}
         $script:OfflineLcuCapRecord = $null

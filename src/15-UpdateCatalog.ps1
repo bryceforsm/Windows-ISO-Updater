@@ -267,11 +267,15 @@ function Get-OfflineLcuCap {
     return $null
 }
 
+# -IgnoreOfflineUpdateCap turns the cap off, so the catalog's newest update is chosen as if there were none. The
+# cap still exists for the note below, which warns that the run is past it.
 function Get-OfflineLcuCutoff {
     param(
         [int]$Build,
-        [bool]$Server = [bool]$script:EffectiveServer
+        [bool]$Server = [bool]$script:EffectiveServer,
+        [bool]$Ignore = [bool]$script:IgnoreOfflineUpdateCap
     )
+    if ($Ignore) { return $null }
     $Cap = Get-OfflineLcuCap -Build $Build -Server $Server
     if ($Cap) { return $Cap.Cutoff }
     return $null
@@ -280,29 +284,43 @@ function Get-OfflineLcuCutoff {
 # What a run says and records about the cap, or $null while it changes nothing. Before the cutoff has passed no
 # update newer than it exists, so a cap is only worth mentioning once it can actually hold one back. A cap that
 # has not been confirmed says so, so nobody reading the log or the ISO's record mistakes a prediction for a fact.
+# An ignored cap is a warning instead, recorded as Ignored, so an ISO that fails or ships unupdated says why.
 function Get-OfflineLcuCapNote {
     param(
         [int]$Build,
         [datetime]$Now = (Get-Date),
-        [bool]$Server = [bool]$script:EffectiveServer
+        [bool]$Server = [bool]$script:EffectiveServer,
+        [bool]$Ignore = [bool]$script:IgnoreOfflineUpdateCap
     )
     $Cap = Get-OfflineLcuCap -Build $Build -Server $Server
     if (-not $Cap -or $Now -le $Cap.Cutoff) { return $null }
     $Month = $Cap.Cutoff.ToString('MMMM yyyy', [System.Globalization.CultureInfo]::InvariantCulture)
     $Message =
-        if ($Cap.Confirmed) {
+        if ($Ignore) {
+            "WARNING: -IgnoreOfflineUpdateCap is set, so build $Build ($($Cap.Release)) is not capped at the $Month cumulative update and a newer one may be chosen. Updates after $Month are Extended Security Updates, which $(if ($Cap.Confirmed) { 'refuse' } else { 'are expected to refuse' }) an offline image. This will likely break the build: DISM fails on that update and the edition ships without it. The script has no workaround for ESU updates offline."
+        }
+        elseif ($Cap.Confirmed) {
             "Build $Build ($($Cap.Release)) is capped at the $Month cumulative update. Later ones carry an Extended Security Updates step that refuses to run on an offline image, so Windows installs them after setup."
         }
         else {
             "Build $Build ($($Cap.Release)) is capped at the $Month cumulative update. Later ones are Extended Security Updates, which are expected to refuse an offline image, but this has not been confirmed yet. Windows installs them after setup on a machine enrolled in ESU. To try a newer one offline, supply it with -UpdatePath."
         }
+    $Status =
+        if ($Ignore) { 'Ignored' }
+        elseif ($Cap.Confirmed) { 'Confirmed' }
+        else { 'Expected' }
+    $Reason =
+        if ($Ignore) { 'Cap turned off with -IgnoreOfflineUpdateCap, so a later Extended Security Update may have been chosen' }
+        elseif ($Cap.Confirmed) { 'Later cumulative updates refuse an offline image (Extended Security Updates)' }
+        else { 'Later cumulative updates are expected to refuse an offline image (Extended Security Updates), not yet confirmed' }
     return [pscustomobject]@{
         Message = $Message
+        Ignored = $Ignore
         Record  = [ordered]@{
             Release   = $Cap.Release
             NotAfter  = $Cap.Cutoff.ToString('yyyy-MM', [System.Globalization.CultureInfo]::InvariantCulture)
-            Status    = if ($Cap.Confirmed) { 'Confirmed' } else { 'Expected' }
-            Reason    = if ($Cap.Confirmed) { 'Later cumulative updates refuse an offline image (Extended Security Updates)' } else { 'Later cumulative updates are expected to refuse an offline image (Extended Security Updates), not yet confirmed' }
+            Status    = $Status
+            Reason    = $Reason
         }
     }
 }
@@ -320,7 +338,8 @@ function Write-OfflineLcuCapNote {
     $script:OfflineLcuCapRecord = $Note.Record
     if ($script:OfflineLcuCapNoted -eq $Build) { return }
     $script:OfflineLcuCapNoted = $Build
-    Write-HostTimestamp "  $($Note.Message)" -ForegroundColor DarkGray
+    if ($Note.Ignored) { Write-HostTimestamp "  $($Note.Message)" -ForegroundColor Yellow }
+    else { Write-HostTimestamp "  $($Note.Message)" -ForegroundColor DarkGray }
 }
 
 # A catalog search returns only its 25 newest matches, so one bounded by an older date can come back with
