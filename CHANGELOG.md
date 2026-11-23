@@ -8,7 +8,7 @@ What changed in each release. Versions are dates, `yyyy.MM.dd.<revision>`. Relea
 
 - The console is easier to follow during a long build. See [Watching a Build's Progress](docs/usage.md#watching-a-builds-progress).
   - The window title names the current step and its percentage, and in Windows Terminal the tab and taskbar button fill up as a progress bar.
-  - Each step starts with a cyan heading ruled out to the edge of the window.
+  - Each step starts with a cyan heading ruled out to the edge of the window. The rows of dashes between sections are now empty lines, so a heading no longer sits under a second rule.
   - Success, warning and error lines start with a symbol (`✓`, `!`, `✗`), and the progress bar is drawn with solid blocks.
   - The finished run's ISO path, size, build, editions and run time are shown together in a box. The `.log` gets the same rows as plain lines.
   - When a run you started yourself ends after a minute or more, the console bell sounds and the taskbar button flashes. Runs with `-Unattended` or `-Scheduled` stay quiet.
