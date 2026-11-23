@@ -487,10 +487,14 @@ function Test-RebuildNeeded {
         $Stamp,
         [string]$SourceHash,
         [System.Collections.IDictionary]$ParameterSet,
-        [string[]]$ExpectedUpdates
+        [string[]]$ExpectedUpdates,
+        # The last build's ISO being gone is then reported but is no reason to rebuild (-IgnoreMissingIso).
+        [switch]$IgnoreMissingIso
     )
 
     $Reasons = New-Object System.Collections.Generic.List[string]
+    # Reported with the reasons, but not reasons to rebuild on their own.
+    $Notes = New-Object System.Collections.Generic.List[string]
 
     if (-not $Stamp) {
         $Reasons.Add('no previous stamp was found, so this is treated as a first build')
@@ -514,7 +518,7 @@ function Test-RebuildNeeded {
     if ($Stamp.Updates -and $Stamp.Updates.Catalog) { $Recorded = @($Stamp.Updates.Catalog | ForEach-Object { "$_" } | Sort-Object) }
     if ($null -eq $ExpectedUpdates) {
         # A network blip must not trigger a two-hour rebuild, so the next scheduled run will look again.
-        $Reasons.Add('the Microsoft Update Catalog could not be reached, so this run assumes nothing new has been published')
+        $Notes.Add('the Microsoft Update Catalog could not be reached, so this run assumes nothing new has been published')
     }
     elseif ($Recorded.Count -eq 0) {
         $Reasons.Add('the last stamp did not record which updates were used')
@@ -530,12 +534,11 @@ function Test-RebuildNeeded {
         $Reasons.Add('the last stamp does not name an output ISO')
     }
     elseif (-not (Test-Path -LiteralPath "$($Stamp.Output.Path)" -PathType Leaf)) {
-        $Reasons.Add("the ISO from the last build is gone ($($Stamp.Output.Path))")
+        if ($IgnoreMissingIso) { $Notes.Add("the ISO from the last build is gone ($($Stamp.Output.Path)), which -IgnoreMissingIso does not count as a reason to rebuild") }
+        else { $Reasons.Add("the ISO from the last build is gone ($($Stamp.Output.Path))") }
     }
 
-    # The catalog-unreachable note is informational only - on its own it is not a reason to rebuild.
-    $Blocking = @($Reasons | Where-Object { $_ -notmatch 'could not be reached' })
-    return [pscustomobject]@{ Rebuild = ($Blocking.Count -gt 0); Reasons = @($Reasons) }
+    return [pscustomobject]@{ Rebuild = ($Reasons.Count -gt 0); Reasons = @($Reasons) + @($Notes) }
 }
 
 #endregion

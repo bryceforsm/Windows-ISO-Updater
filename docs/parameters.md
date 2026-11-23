@@ -75,6 +75,7 @@ See [Scheduled Runs](scheduled-runs.md) for how these fit together.
 |---|---|
 | `-Scheduled` | Run as an unattended job: no prompts, no "press enter to exit", and the whole build is skipped when the stamp shows nothing has changed. This is what `-RegisterScheduledTask` puts on the task's command line. |
 | `-Force` | Build even when the stamp says nothing has changed. |
+| `-IgnoreMissingIso` | Don't rebuild just because the ISO from the last build is no longer where it was written, for example when a later step moves it to a share or deletes it once it has been copied somewhere else. The log still says it is gone. A changed source ISO, build parameter or update still triggers a rebuild, and so does a stamp that names no ISO at all. Off by default. |
 | `-CheckOnly` | Only report whether a rebuild is needed, then exit without downloading or building. Exit code `0` = nothing to do, `10` = a rebuild is needed. |
 | `-NoStamp` | Ignore the stamps completely: do not read one to skip the run, and do not write one at the end. |
 | `-StampPath` | Directory to keep the build stamps in. Defaults to a `Stamps` folder inside the working folder. Point several machines at a share to give them one shared history. |

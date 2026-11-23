@@ -1039,6 +1039,32 @@ Describe 'Test-RebuildNeeded' {
         (Test-RebuildNeeded -Stamp $script:Stamp -SourceHash 'BBBB' -ParameterSet $script:Parameters -ExpectedUpdates 'LCU=KB1').Rebuild | Should -BeTrue
     }
 
+    It 'rebuilds when the last ISO is gone' {
+        Remove-Item -LiteralPath $script:Stamp.Output.Path
+        $Decision = Test-RebuildNeeded -Stamp $script:Stamp -SourceHash 'AAAA' -ParameterSet $script:Parameters -ExpectedUpdates 'LCU=KB1'
+        $Decision.Rebuild | Should -BeTrue
+        $Decision.Reasons | Should -Match 'the ISO from the last build is gone'
+    }
+
+    It 'only notes a missing ISO with -IgnoreMissingIso' {
+        Remove-Item -LiteralPath $script:Stamp.Output.Path
+        $Decision = Test-RebuildNeeded -Stamp $script:Stamp -SourceHash 'AAAA' -ParameterSet $script:Parameters -ExpectedUpdates 'LCU=KB1' -IgnoreMissingIso
+        $Decision.Rebuild | Should -BeFalse
+        $Decision.Reasons | Should -Match '-IgnoreMissingIso does not count'
+    }
+
+    It 'still rebuilds for anything else with -IgnoreMissingIso' {
+        Remove-Item -LiteralPath $script:Stamp.Output.Path
+        (Test-RebuildNeeded -Stamp $script:Stamp -SourceHash 'BBBB' -ParameterSet $script:Parameters -ExpectedUpdates 'LCU=KB1' -IgnoreMissingIso).Rebuild | Should -BeTrue
+        (Test-RebuildNeeded -Stamp $script:Stamp -SourceHash 'AAAA' -ParameterSet $script:Parameters -ExpectedUpdates 'LCU=KB2' -IgnoreMissingIso).Rebuild | Should -BeTrue
+    }
+
+    It 'does not rebuild only because the catalog could not be reached' {
+        $Decision = Test-RebuildNeeded -Stamp $script:Stamp -SourceHash 'AAAA' -ParameterSet $script:Parameters -ExpectedUpdates $null
+        $Decision.Rebuild | Should -BeFalse
+        $Decision.Reasons | Should -Match 'could not be reached'
+    }
+
     It 'rebuilds when a build parameter changed' {
         $Changed = [ordered]@{ SkipDotNet = 'True' }
         (Test-RebuildNeeded -Stamp $script:Stamp -SourceHash 'AAAA' -ParameterSet $Changed -ExpectedUpdates 'LCU=KB1').Rebuild | Should -BeTrue

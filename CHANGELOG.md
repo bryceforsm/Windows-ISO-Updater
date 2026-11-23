@@ -6,6 +6,7 @@ What changed in each release. Versions are dates, `yyyy.MM.dd.<revision>`. Relea
 
 ### Added
 
+- `-IgnoreMissingIso` stops a run from rebuilding only because the ISO from the last build is no longer where it was written, for when something else moves or deletes it afterwards. The log still notes that it is gone, and a changed source ISO, build parameter or update still triggers a rebuild. See [When a run decides to rebuild](docs/scheduled-runs.md#when-a-run-decides-to-rebuild).
 - The console is easier to follow during a long build. See [Watching a Build's Progress](docs/usage.md#watching-a-builds-progress).
   - The window title names the current step and its percentage, and in Windows Terminal the tab and taskbar button fill up as a progress bar.
   - Each step starts with a cyan heading ruled out to the edge of the window. The rows of dashes between sections are now empty lines, so a heading no longer sits under a second rule.

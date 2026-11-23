@@ -88,9 +88,13 @@ A rebuild happens if any of these is true:
 * the source ISO's SHA-256 differs from the one in the stamp,
 * a build-affecting parameter changed, including editing the `-UnattendPath` answer file in place, dropping a newer driver into the `-DriverPath` folder, or changing anything in the `-ExtraFilesPath` folder,
 * the catalog is offering a different, newer or additional update than the stamp recorded,
-* the ISO the last build produced is no longer on disk.
+* the ISO the last build produced is no longer on disk, unless `-IgnoreMissingIso` is set.
 
 Otherwise the run stops and says so. `-Force` builds anyway.
+
+If something else takes the finished ISO away, such as a script that moves it to a share or uploads it and
+deletes the local copy, add `-IgnoreMissingIso`. A run then rebuilds only when there is something new to
+build, and the log notes that the last ISO is gone.
 
 If the update catalog cannot be reached at all, the run assumes nothing new has been published and skips
 rather than burning two hours on a network blip. The next scheduled run looks again.
