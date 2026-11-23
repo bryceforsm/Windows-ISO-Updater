@@ -12,7 +12,8 @@ BeforeAll {
         'Compare-ScriptVersion', 'Receive-VersionCheck', 'Write-VersionCheckResult',
         'Get-ConsoleStyleSet', 'Get-ConsoleSymbol', 'Format-StepHeader', 'Format-SummaryBox',
         'Get-OscdimgSummary', 'Get-OscdimgLogLines', 'Format-OscdimgSummary',
-        'Add-WimSizeSample', 'Show-WimSizeComparison'
+        'Add-WimSizeSample', 'Show-WimSizeComparison',
+        'Get-TimeStamp', 'Get-MessageColumn', 'Get-ConsoleIndent', 'New-ProgressLine'
     )
     foreach ($Name in $Names) {
         $Definition = $Ast.Find({
@@ -1495,5 +1496,41 @@ Describe 'The image size comparison' {
         Show-WimSizeComparison
         $script:Calls[0] | Should -Match '^stamp:Image sizes'
         $script:Calls[-1] | Should -Be 'host:'
+    }
+}
+
+Describe 'Console indentation' {
+    BeforeAll {
+        function Get-ConsoleWidth { 120 }
+    }
+
+    It 'starts the message column after the timestamp, a space, the symbol and another space' {
+        Get-MessageColumn | Should -Be 13
+    }
+
+    It 'moves a top-level line in a level inside a step' {
+        Get-ConsoleIndent -Lead 0 -InStep $true | Should -Be 2
+        Get-ConsoleIndent -Lead 1 -InStep $true | Should -Be 2
+    }
+
+    It 'leaves deeper lines inside a step, and every line outside one, as written' {
+        Get-ConsoleIndent -Lead 2 -InStep $true | Should -Be 2
+        Get-ConsoleIndent -Lead 4 -InStep $true | Should -Be 4
+        Get-ConsoleIndent -Lead 0 -InStep $false | Should -Be 0
+        Get-ConsoleIndent -Lead 4 -InStep $false | Should -Be 4
+    }
+
+    It 'puts a progress line one level under the last message' {
+        $script:LastTextColumn = 17
+        (New-ProgressLine).Indent | Should -Be 19
+    }
+
+    It 'keeps an indent it is given' {
+        (New-ProgressLine -Indent 6).Indent | Should -Be 6
+    }
+
+    It 'uses the message column before any message has been written' {
+        $script:LastTextColumn = $null
+        (New-ProgressLine).Indent | Should -Be 15
     }
 }

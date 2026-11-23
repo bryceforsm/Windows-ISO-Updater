@@ -151,7 +151,7 @@ if ($RecoveryIsoOnly) {
                             $From = Join-Path -Path $WinReMount -ChildPath "Windows\Boot\EFI\$Name"
                             if (Test-Path -LiteralPath $From) { Copy-Item -LiteralPath $From -Destination $RecoveryBootManagers -Force -ErrorAction Stop }
                         }
-                        Save-MountedImage -Path $WinReMount -Indent 28
+                        Save-MountedImage -Path $WinReMount
                         $Re = Get-WinReVersion -WinReWim $script:RecoveryWinRe
                         if ($Re) { Write-HostTimestamp "  The recovery image is now at $($Re.Version)." -ForegroundColor Green }
                     }
