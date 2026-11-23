@@ -1,6 +1,6 @@
 # GENERATED FILE. Edit the files in src\ and run tools\Build-Script.ps1, because changes made here are overwritten.
 # Windows ISO Updater
-# Version: 2026.11.22.2   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
+# Version: 2026.11.22.3   (date-based, stamped automatically by tools\Update-Version.ps1 on commit)
 #
 #region Script overview
 # This script builds a fully up-to-date ("slipstreamed") Windows 11, Windows 10 or Windows Server
@@ -320,7 +320,7 @@ $script:ScriptPath = $PSCommandPath
 
 # Kept in step with the header comment by tools\Update-Version.ps1, and shown in the log and recorded in
 # the build stamp so a finished ISO can be traced back to the exact script that built it.
-$ScriptVersion = '2026.11.22.2'
+$ScriptVersion = '2026.11.22.3'
 
 # A scheduled run has nobody to answer a prompt.
 if ($Scheduled) {
@@ -2749,7 +2749,7 @@ function Get-UpdateFileRecords {
 # deliberately left out: moving the working folder does not make last month's ISO wrong.
 $script:BuildAffectingParameters = @(
     'WindowsVersion', 'Release', 'Language', 'Edition', 'KeepEditions', 'KeepAllEditions',
-    'UpdatePath', 'SkipDotNet', 'SkipSetupDU', 'SkipWinRE', 'BaselineOnly', 'IncludePreview', 'IgnoreOfflineUpdateCap', 'ReapplyUpdates', 'SkipUpdates', 'SkipServicing', 'CompressEsd', 'FastCompression', 'VolumeLabel',
+    'UpdatePath', 'SkipDotNet', 'SkipSetupDU', 'SkipWinRE', 'BaselineOnly', 'IncludePreview', 'ReapplyUpdates', 'SkipUpdates', 'SkipServicing', 'CompressEsd', 'FastCompression', 'VolumeLabel',
     'SkipTattoo', 'StripImageResidue', 'DriverPath', 'AllowUnsignedDrivers', 'ExtraFilesPath'
 )
 
@@ -2772,6 +2772,7 @@ function Get-BuildParameterSet {
     $Set['ExtraFiles'] = if ($script:ExtraFilesHash) { $script:ExtraFilesHash } else { '' }
     # Only present when asked for, so turning it on forces one rebuild without changing every older stamp's hash.
     if ($RecoveryIsoPath) { $Set['RecoveryIso'] = 'True' }
+    if ($IgnoreOfflineUpdateCap) { $Set['IgnoreOfflineUpdateCap'] = 'True' }
     return $Set
 }
 
@@ -7106,6 +7107,8 @@ if (-not $NoStamp) {
     if (-not $script:StampDecision.Rebuild) {
         if ($Force) {
             Write-HostTimestamp 'Nothing has changed since the last build, but -Force was specified - building anyway.' -ForegroundColor Yellow
+            # The step above already ended with a rule, so only a line printed after it needs another.
+            Write-Host $LineBreak
         }
         else {
             Write-HostTimestamp 'Nothing has changed since the last build, so this run has nothing to do.' -ForegroundColor Green
@@ -7123,7 +7126,6 @@ if (-not $NoStamp) {
             exit 0
         }
     }
-    Write-Host $LineBreak
 }
 elseif ($CheckOnly) {
     Write-HostTimestamp '-CheckOnly needs the build stamps to compare against, but -NoStamp turned them off. Assuming a rebuild is needed (exit code 10).' -ForegroundColor Yellow

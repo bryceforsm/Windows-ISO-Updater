@@ -267,6 +267,8 @@ if (-not $NoStamp) {
     if (-not $script:StampDecision.Rebuild) {
         if ($Force) {
             Write-HostTimestamp 'Nothing has changed since the last build, but -Force was specified - building anyway.' -ForegroundColor Yellow
+            # The step above already ended with a rule, so only a line printed after it needs another.
+            Write-Host $LineBreak
         }
         else {
             Write-HostTimestamp 'Nothing has changed since the last build, so this run has nothing to do.' -ForegroundColor Green
@@ -284,7 +286,6 @@ if (-not $NoStamp) {
             exit 0
         }
     }
-    Write-Host $LineBreak
 }
 elseif ($CheckOnly) {
     Write-HostTimestamp '-CheckOnly needs the build stamps to compare against, but -NoStamp turned them off. Assuming a rebuild is needed (exit code 10).' -ForegroundColor Yellow
