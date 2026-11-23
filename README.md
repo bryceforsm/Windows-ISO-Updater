@@ -61,10 +61,13 @@ flowchart LR
 
 ## Quick Start
 
-1. Place [`Run-Windows-ISO-Updater.bat`](https://github.com/bryceforsm/Windows-ISO-Updater/releases) and [`Windows-ISO-Updater.ps1`](https://github.com/bryceforsm/Windows-ISO-Updater/releases) in the same directory.
-2. Drag an official Windows ISO onto `Run-Windows-ISO-Updater.bat` and accept the administrator prompt. The tool builds from that ISO.
-3. Or put the ISO in `C:\WISO-Work\Downloads`, then right-click `Run-Windows-ISO-Updater.bat` and select **Run as administrator**.
-4. Confirm the build settings displayed in the console prompt.
+1. Download `Run-Windows-ISO-Updater.bat` and `Windows-ISO-Updater.ps1` from the [latest release](https://github.com/bryceforsm/Windows-ISO-Updater/releases/latest) and save them in the same folder.
+2. Start a build from an official Windows ISO, either way:
+   * Drag the ISO onto `Run-Windows-ISO-Updater.bat`.
+   * Or put the ISO in `C:\WISO-Work\Downloads`, then double-click `Run-Windows-ISO-Updater.bat`.
+3. Click **Yes** on the administrator prompt. The tool continues in a new window.
+4. Check the summary of what the build will do, then type `Y` to start it.
+5. When the build finishes, the updated ISO is in `C:\WISO-Work\Output`.
 
 To speed up the update and shrink the ISO, the tool removes the editions you are unlikely to need. On client media it keeps Enterprise, Pro and Home, and on Server media it keeps one edition, Standard if the ISO has it. Use `-KeepAllEditions` to keep every edition, or `-KeepEditions` to pick which ones stay.
 
