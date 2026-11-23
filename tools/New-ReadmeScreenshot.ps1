@@ -86,8 +86,8 @@ function Add-Line {
     Add-Raw -Text ("$Stamp " + $Text.Substring(0, $Lead) + "$Symbol " + $Text.TrimStart()) -Color $Color -Indent ($Stamp.Length + 1 + $Lead + 2)
 }
 
-# The script's $LineBreak, an empty line between sections.
-function Add-Rule { Add-Raw }
+# The script's $LineBreak, a row of dashes the width of the console between sections.
+function Add-Rule { Add-Raw -Text ('-' * $Columns) }
 
 # A PowerShell prompt, coloured the way PSReadLine colours what is typed after it. Each segment is a piece
 # of text and its console colour, and the whole line has to fit in -Columns.
@@ -96,7 +96,7 @@ function Add-Prompt {
     $script:Lines.Add([pscustomobject]@{ Text = (($Segments | ForEach-Object { $_[0] }) -join ''); Color = 'Gray'; Segments = $Segments })
 }
 
-# Invoke-Task: the step's heading, whatever the step prints, then its duration and an empty line.
+# Invoke-Task: the step's heading, whatever the step prints, then its duration and a rule.
 function Add-Step {
     param([string]$Description, [scriptblock]$Body, [double]$Wait = 0)
     Add-Line (Format-StepHeader -Text $Description -Width $Columns -Rule $script:Style.Rule -PrefixLength 13) -Color Cyan -Symbol $script:Style.Rule -Wait $Wait
